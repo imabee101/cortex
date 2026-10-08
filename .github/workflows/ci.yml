@@ -5,22 +5,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]                        # feature branches are covered by their PR: no double runs
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]         # stable tag -> promote only, never compiles
   merge_group:                              # merge queue needs an org-owned repo; dormant here
-  workflow_dispatch:
-    inputs:
-      build_number:
-        description: Build number to promote to stable (no rebuild)
-        required: true
-        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  # PRs: newest push cancels the old run. main and tags: never cancelled; a newer queued run replaces
-  # an older queued one. The event is part of the key so a promotion dispatched on main never waits
-  # behind, or is replaced by, a main build. Publish/promote/deploy also hold their own groups below.
+  # PRs: newest push cancels the old run. main: never cancelled; a newer queued run replaces an older
+  # queued one. Publish/deploy/promote also hold their own groups below.
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -40,7 +32,6 @@ jobs:
   # Stage 1, cheap, Linux only. Decides everything else: whether Rust changed and the build id.
   # One job, not several, because GitHub bills each job rounded up to a whole minute.
   gates:
-    if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -207,7 +198,7 @@ jobs:
       - run: brew install protobuf && cargo nextest run -p cortex-update --locked
 
   # Stage 4, release build: main only, Rust changed, every gate green. One build per target, never
-  # repeated elsewhere: publish and promote only move these artifacts.
+  # repeated elsewhere: publish, deploy and promote only move these artifacts.
   build:
     needs: [gates, tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gates.outputs.rust == 'true'
@@ -370,66 +361,10 @@ jobs:
               --title "Cortex $BUILD_ID" --generate-notes
           fi
 
-  # Promote path: workflow_dispatch(build_number) or a pushed stable tag vX.Y.Z. Downloads the build's
-  # release, verifies checksums, republishes the same bytes as the stable release. No compilation.
-  promote:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    concurrency:
-      group: promote                          # its own group: a pending publish can never replace it
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    outputs:
-      build_id: ${{ steps.pick.outputs.build_id }}
-      version: ${{ steps.pick.outputs.version }}
-      stable: ${{ steps.pick.outputs.stable }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      NUMBER: ${{ inputs.build_number }}
-    steps:
-      - name: pick the build
-        id: pick
-        run: |
-          set -euo pipefail
-          tags=$(gh release list --repo "$REPO" --limit 200 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName')
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            tag=$(grep -E -- "-build\.$NUMBER\$" <<< "$tags" | head -n1)
-            [ -n "$tag" ] || { echo "no pre-release for build $NUMBER" >&2; exit 1; }
-            stable=${tag%-build.*}
-          else
-            stable=$GITHUB_REF_NAME
-            # The newest build of exactly the commit the stable tag points at.
-            tag=""
-            while read -r t; do
-              [ "$(gh api "repos/$REPO/commits/$t" --jq .sha)" = "$GITHUB_SHA" ] && { tag=$t; break; }
-            done < <(grep -E "^$stable-build\.[0-9]+\$" <<< "$tags" | sort -V -r)
-            [ -n "$tag" ] || { echo "no build of $GITHUB_SHA for $stable" >&2; exit 1; }
-          fi
-          printf 'build_tag=%s\nbuild_id=%s\nversion=%s\nstable=%s\n' "$tag" "${tag#v}" "${stable#v}" "$stable" >> "$GITHUB_OUTPUT"
-      - name: verify and republish
-        env:
-          BUILD_TAG: ${{ steps.pick.outputs.build_tag }}
-          STABLE: ${{ steps.pick.outputs.stable }}
-        run: |
-          set -euo pipefail
-          gh release download "$BUILD_TAG" --repo "$REPO" --dir art
-          (cd art && sha256sum -c SHA256SUMS)
-          sha=$(gh api "repos/$REPO/commits/$BUILD_TAG" --jq .sha)
-          gh api "repos/$REPO/git/ref/tags/$STABLE" > /dev/null 2>&1 \
-            || gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$STABLE" -f sha="$sha" > /dev/null
-          if gh release view "$STABLE" --repo "$REPO" > /dev/null 2>&1; then
-            echo "$STABLE already released; nothing to do"
-          else
-            gh release create "$STABLE" art/* --repo "$REPO" --verify-tag --latest \
-              --title "Cortex $STABLE" --notes "Promoted from build ${BUILD_TAG#v} without rebuilding. Install: \`curl -fsSL https://llm.imabee.com/cli/install.sh | bash\`"
-          fi
-
-  # Users get only promoted builds: publishes them to the harness's update flow on the production host.
+  # Stage 6, deploy: every published build goes to the harness's update flow on the production host.
+  # Nobody tags or dispatches anything; a failed check rolls the host back and nothing is promoted.
   deploy:
-    needs: promote
+    needs: [gates, publish]
     runs-on: [self-hosted, cortex-prod]
     environment: production
     timeout-minutes: 45
@@ -437,9 +372,8 @@ jobs:
       group: deploy
       cancel-in-progress: false
     env:
-      BUILD: ${{ needs.promote.outputs.build_id }}          # artifact names in the release
-      VERSION: ${{ needs.promote.outputs.version }}         # what the feed serves and the binary reports
-      STABLE: ${{ needs.promote.outputs.stable }}
+      BUILD: ${{ needs.gates.outputs.build_id }}            # artifact names in the release
+      VERSION: ${{ needs.gates.outputs.version }}           # what the feed serves and the binary reports
       DIST: /opt/cortex/dist
       BASE: https://llm.imabee.com/cli
     steps:
@@ -453,7 +387,7 @@ jobs:
         run: |
           set -euo pipefail
           A=$RUNNER_TEMP/art; mkdir -p "$A"; cd "$A"
-          url="https://github.com/$REPO/releases/download/$STABLE"
+          url="https://github.com/$REPO/releases/download/v$BUILD"
           curl -fsSL --retry 3 -O "$url/SHA256SUMS"
           for f in $(awk '{print $2}' SHA256SUMS) "$VERSION.external.md" "$VERSION.external.json"; do
             curl -fsSL --retry 3 -O "$url/$f"
@@ -559,10 +493,44 @@ jobs:
           fi
           echo "rolled back to ${PREV_VER:-the configured version}" >&2
 
+  # Stage 7, promote: only after users have the build. Tags vX.Y.Z on the commit and republishes the same
+  # bytes as the latest release, so the next build's version starts from it. No compilation.
+  promote:
+    needs: [gates, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: promote
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      BUILD_TAG: v${{ needs.gates.outputs.build_id }}
+      STABLE: v${{ needs.gates.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: verify and republish (idempotent)
+        run: |
+          set -euo pipefail
+          gh release download "$BUILD_TAG" --repo "$REPO" --dir art
+          (cd art && sha256sum -c SHA256SUMS)
+          if sha=$(gh api "repos/$REPO/git/ref/tags/$STABLE" --jq .object.sha 2>/dev/null); then
+            [ "$sha" = "$GITHUB_SHA" ] || { echo "$STABLE points at $sha, not $GITHUB_SHA" >&2; exit 1; }
+          else
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$STABLE" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          if gh release view "$STABLE" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$STABLE" art/* --repo "$REPO" --clobber
+          else
+            gh release create "$STABLE" art/* --repo "$REPO" --verify-tag --latest \
+              --title "Cortex $STABLE" --notes "Build ${BUILD_TAG#v}, deployed to the update feed. Install: \`curl -fsSL https://llm.imabee.com/cli/install.sh | bash\`"
+          fi
+
   # Single required status check for branch protection and auto-merge.
   ci-ok:
-    if: always() && github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
-    needs: [gates, tests, native, build, publish]
+    if: always()
+    needs: [gates, tests, native, build, publish, deploy, promote]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
