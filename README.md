@@ -53,13 +53,13 @@ One workflow, [`ci.yml`](.github/workflows/ci.yml), driven by the event. Cheap c
 flowchart LR
   P(["pull request"]) --> G["gates<br/>fmt · clippy · audit · brand"] --> T["tests<br/>nextest · coverage"]
   M(["merge to main"]) --> G
-  T -- "main, Rust changed" --> B["build x4<br/>once per platform"] --> R["publish<br/>tag + pre-release"]
-  S(["stable tag or dispatch"]) --> PR["promote<br/>no compile"] --> D["deploy<br/>update feed"]
+  T -- "main, Rust changed" --> B["build x4<br/>once per platform"] --> R["publish<br/>pre-release"]
+  R --> D["deploy<br/>update feed"] --> PR["promote<br/>stable tag + latest"]
 ```
 
 - Every build is `<version>-build.<run number>` in its tag, release and artifact names. The binary reports the plain `<version>` and its commit (`cortex 1.0.48 (0fcd6607943e)`), because the updater's stable channel refuses pre-release versions. The CI picks the version from tags (patch by default, a `minor` or `major` PR label raises it); no file is edited.
 - Windows is cross-built on Linux, macOS and ARM Linux are native. Changes that touch no Rust path build and publish nothing, so build numbers can skip.
-- A pre-release is promoted to stable by tagging `vX.Y.Z` on its commit or running the workflow with the build number. Promotion republishes the same verified bytes and deploys them to the feed `cortex update` reads.
+- Every merge that changes Rust ships with no manual step: the same verified bytes go to the feed `cortex update` reads, the previous client must update itself to them or the host rolls back, and only then does CI tag `vX.Y.Z` and mark the release latest.
 - Assets carry `SHA256SUMS` and a build-provenance attestation: `gh attestation verify <file> --repo imabee101/cortex`.
 
 Operations (deploy host, limits, backups, rollback) are in [`RUNBOOK.md`](RUNBOOK.md).
