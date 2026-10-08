@@ -19,8 +19,9 @@ permissions:
 
 concurrency:
   # PRs: newest push cancels the old run. main and tags: never cancelled; a newer queued run replaces
-  # an older queued one. Publish/promote/deploy also hold their own non-cancelling groups below.
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # an older queued one. The event is part of the key so a promotion dispatched on main never waits
+  # behind, or is replaced by, a main build. Publish/promote/deploy also hold their own groups below.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -81,7 +82,7 @@ jobs:
           # passed on as an output; run_number is unchanged by re-runs (run_attempt > 1).
           stable=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)
           IFS=. read -r major minor patch <<< "${stable:-v1.0.45}"; major=${major#v}
-          labels=$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at) | .labels[].name] | join(" ")' || true)
+          labels=$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at) | .labels[].name] | join(" ")')
           case " $labels " in
             *" major "*) next="$((major + 1)).0.0" ;;
             *" minor "*) next="$major.$((minor + 1)).0" ;;
@@ -366,7 +367,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
-      group: publish
+      group: promote                          # its own group: a pending publish can never replace it
       cancel-in-progress: false
     permissions:
       contents: write
