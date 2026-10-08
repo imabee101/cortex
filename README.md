@@ -22,12 +22,10 @@ single self-hosted gateway in front of [llama.cpp](https://github.com/ggml-org/l
 ## Install
 
 ```sh
-curl -fsSL https://llm.imabee.com/cli/install.sh | bash   # macOS, Linux, Git Bash
-irm https://llm.imabee.com/cli/install.ps1 | iex          # Windows PowerShell
-cortex --version
+curl -fsSL https://llm.imabee.com/cli/install.sh | bash
 ```
 
-Builds: Linux x86_64 and aarch64, macOS Apple silicon, Windows x86_64. `cortex update` upgrades in place from the same host. The first launch opens your browser to sign in.
+One command on every platform: macOS, Linux, WSL, and Windows in Git Bash (it installs `cortex.exe`). Builds: Linux x86_64 and aarch64, macOS Apple silicon, Windows x86_64. `cortex update` upgrades in place from the same host. The first launch opens your browser to sign in.
 
 ## How it fits together
 
