@@ -251,6 +251,10 @@ jobs:
         with:
           key: release-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cross toolchain
+        if: matrix.xwin
+        # C dependencies (ring, aws-lc) are compiled with clang-cl and archived with llvm-lib.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends clang lld llvm
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         if: matrix.xwin
         with:
