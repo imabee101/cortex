@@ -48,6 +48,7 @@ jobs:
       pull-requests: read                     # the merged PR's minor/major label
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
+      version: ${{ steps.id.outputs.version }}
       build_id: ${{ steps.id.outputs.build_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,7 +92,7 @@ jobs:
           # Never go backwards: a build already published at a higher core keeps that core.
           built=$(git tag -l 'v*-build.*' | sed 's/^v//; s/-build\..*//' | sort -V | tail -n1)
           [ -z "$built" ] || next=$(printf '%s\n%s\n' "$next" "$built" | sort -V | tail -n1)
-          echo "build_id=$next-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\nbuild_id=%s-build.%s\n' "$next" "$next" "$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
       - name: brand and secret scan
         run: |
           set -euo pipefail
@@ -214,7 +215,9 @@ jobs:
     timeout-minutes: 120
     env:
       BUILD_ID: ${{ needs.gates.outputs.build_id }}
-      CORTEX_VERSION: ${{ needs.gates.outputs.build_id }}   # stamped into the binary and --version
+      # The binary carries the plain version it ships as: the harness's updater rejects a pre-release on the
+      # stable channel, and promotion must not recompile. --version adds the commit, which names the build.
+      CORTEX_VERSION: ${{ needs.gates.outputs.version }}
       CARGO_PROFILE_RELEASE_DIST_DEBUG: "0"                  # shipped binary is stripped; DWARF only costs time and cache
     strategy:
       matrix:
@@ -299,7 +302,7 @@ jobs:
           cp "target/$TARGET/release-dist/cortex-pager$EXE" "$bin"
           case "$PLATFORM" in linux-*) strip "$bin" ;; macos-*) strip -x "$bin" ;; esac
           # Native legs prove the stamp; the Windows exe is cross-built and has no runner to execute it.
-          [ -n "$EXE" ] || "./$bin" --version | grep -q "^cortex $BUILD_ID "
+          [ -n "$EXE" ] || "./$bin" --version | grep -q "^cortex $CORTEX_VERSION ($(git rev-parse --short=12 HEAD))"
           zstd -19 -q -T0 -k "$bin"
           [ "$TARGET" != x86_64-unknown-linux-gnu ] || install -m 0755 "target/$TARGET/release/cortex-api" "out/cortex-api-$BUILD_ID-linux-x86_64"
           (cd out && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done)
@@ -324,6 +327,7 @@ jobs:
       id-token: write
       attestations: write
     env:
+      VERSION: ${{ needs.gates.outputs.version }}
       BUILD_ID: ${{ needs.gates.outputs.build_id }}
       TAG: v${{ needs.gates.outputs.build_id }}
       GH_TOKEN: ${{ github.token }}
@@ -342,10 +346,10 @@ jobs:
           cd art
           for f in *.sha256; do sha256sum -c "$f"; done
           cat ./*.sha256 | sed 's#  \*\?#  #' > SHA256SUMS && rm ./*.sha256
-          # The harness's update flow reads changelogs/<version>.external.{md,json}.
+          # The harness's update flow reads changelogs/<version>.external.{md,json}, by the version clients see.
           title=${SUBJECT%%$'\n'*}
-          printf '# Cortex %s\n\n- %s\n' "$BUILD_ID" "$title" > "$BUILD_ID.external.md"
-          jq -n --arg d "$title" '[{category: "features", description: $d, breaking_change: false}]' > "$BUILD_ID.external.json"
+          printf '# Cortex %s (build %s)\n\n- %s\n' "$VERSION" "${BUILD_ID##*.}" "$title" > "$VERSION.external.md"
+          jq -n --arg d "$title" '[{category: "features", description: $d, breaking_change: false}]' > "$VERSION.external.json"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: art/SHA256SUMS
@@ -379,6 +383,7 @@ jobs:
       contents: write
     outputs:
       build_id: ${{ steps.pick.outputs.build_id }}
+      version: ${{ steps.pick.outputs.version }}
       stable: ${{ steps.pick.outputs.stable }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -403,7 +408,7 @@ jobs:
             done < <(grep -E "^$stable-build\.[0-9]+\$" <<< "$tags" | sort -V -r)
             [ -n "$tag" ] || { echo "no build of $GITHUB_SHA for $stable" >&2; exit 1; }
           fi
-          printf 'build_tag=%s\nbuild_id=%s\nstable=%s\n' "$tag" "${tag#v}" "$stable" >> "$GITHUB_OUTPUT"
+          printf 'build_tag=%s\nbuild_id=%s\nversion=%s\nstable=%s\n' "$tag" "${tag#v}" "${stable#v}" "$stable" >> "$GITHUB_OUTPUT"
       - name: verify and republish
         env:
           BUILD_TAG: ${{ steps.pick.outputs.build_tag }}
@@ -432,7 +437,8 @@ jobs:
       group: deploy
       cancel-in-progress: false
     env:
-      VERSION: ${{ needs.promote.outputs.build_id }}
+      BUILD: ${{ needs.promote.outputs.build_id }}          # artifact names in the release
+      VERSION: ${{ needs.promote.outputs.version }}         # what the feed serves and the binary reports
       STABLE: ${{ needs.promote.outputs.stable }}
       DIST: /opt/cortex/dist
       BASE: https://llm.imabee.com/cli
@@ -454,18 +460,19 @@ jobs:
           done
           sha256sum -c SHA256SUMS
           for p in linux-x86_64 linux-aarch64 macos-aarch64 windows-x86_64; do
-            f="cortex-$VERSION-$p"; [ "$p" = windows-x86_64 ] && f="$f.exe"
+            f="cortex-$BUILD-$p"; [ "$p" = windows-x86_64 ] && f="$f.exe"
             [ -s "$f" ] && [ -s "$f.zst" ] || { echo "missing $f" >&2; exit 1; }
           done
-          chmod +x "cortex-$VERSION-linux-$(uname -m)" "cortex-api-$VERSION-linux-x86_64"
-          "./cortex-$VERSION-linux-$(uname -m)" --version < /dev/null | grep -q "^cortex $VERSION "
+          chmod +x "cortex-$BUILD-linux-$(uname -m)" "cortex-api-$BUILD-linux-x86_64"
+          "./cortex-$BUILD-linux-$(uname -m)" --version < /dev/null | grep -q "^cortex $VERSION "
       - name: publish to the update feed
         run: |
           set -euo pipefail
           A=$RUNNER_TEMP/art
           S=crates/codegen/cortex-pager/scripts
           put() { install -m 0644 "$1" "$2.part" && mv -f "$2.part" "$2"; }
-          for f in "$A"/cortex-"$VERSION"-*; do put "$f" "$DIST/${f##*/}"; done
+          # Same bytes, served under the version the binary reports.
+          for f in "$A"/cortex-"$BUILD"-*; do n=${f##*/}; put "$f" "$DIST/cortex-$VERSION-${n#cortex-"$BUILD"-}"; done
           for f in "$A/$VERSION".external.*; do put "$f" "$DIST/changelogs/${f##*/}"; done
           for f in install.sh install.ps1 install-enterprise.sh install-enterprise.ps1; do put "$S/$f" "$DIST/$f"; done
       - name: switch cortex-api
@@ -475,7 +482,7 @@ jobs:
             "$(readlink -f /opt/cortex/current)" "$(tr -d '[:space:]' < "$DIST/stable" 2>/dev/null || true)" > "$RUNNER_TEMP/prev.env"
           rel=/opt/cortex/releases/$(date -u +%Y%m%dT%H%M%SZ)
           install -d "$rel"
-          install -m 0755 "$RUNNER_TEMP/art/cortex-api-$VERSION-linux-x86_64" "$rel/cortex-api"
+          install -m 0755 "$RUNNER_TEMP/art/cortex-api-$BUILD-linux-x86_64" "$rel/cortex-api"
           touch "$RUNNER_TEMP/api-switched"
           sudo -n /usr/bin/ln -sfn "$rel" /opt/cortex/current
           sudo -n /usr/bin/systemctl restart cortex-api.service
@@ -498,7 +505,7 @@ jobs:
             for name in "$f" "$f.zst"; do
               head=$(curl -sI -m 30 "$BASE/$name")
               grep -q '^HTTP/[0-9.]* 200' <<< "$head" || { echo "$name is not served" >&2; exit 1; }
-              [ "$(awk 'tolower($1)=="content-length:"{print $2+0}' <<< "$head")" = "$(stat -c%s "$A/$name")" ] \
+              [ "$(awk 'tolower($1)=="content-length:"{print $2+0}' <<< "$head")" = "$(stat -c%s "$A/${name/#cortex-$VERSION-/cortex-$BUILD-}")" ] \
                 || { echo "$name: served size differs" >&2; exit 1; }
             done
             [ "$(curl -s -o /dev/null -w '%{http_code}' -m 30 -r 0-9 "$BASE/$f.zst")" = 206 ] \
@@ -510,7 +517,9 @@ jobs:
           PREV_VER=""
           . "$RUNNER_TEMP/prev.env"
           prev="$DIST/cortex-$PREV_VER-linux-$(uname -m)"
-          if [ -n "$PREV_VER" ] && [ -f "$prev" ]; then
+          # Skipped only on the very first deploy; a previous version whose client is missing is a failure.
+          if [ -n "$PREV_VER" ]; then
+            [ -f "$prev" ] || { echo "previous client $prev is missing; cannot prove the update" >&2; exit 1; }
             home=$(mktemp -d)
             mkdir -p "$home/.cortex/downloads" "$home/.cortex/bin"
             install -m 0755 "$prev" "$home/.cortex/downloads/${prev##*/}"
