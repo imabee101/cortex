@@ -109,7 +109,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.rust == 'true'
         with:
-          key: gates
+          # Keyed on the pinned toolchain, not the runner image's preinstalled stable Rust, which
+          # rust-cache would otherwise hash in and which changes with every image rollout.
+          key: gates-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}   # PRs restore, never write: protects the quota
       - name: protoc
         if: steps.changes.outputs.rust == 'true'
@@ -159,7 +162,8 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: tests
+          key: tests-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
@@ -193,7 +197,8 @@ jobs:
           toolchain: 1.94.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: native
+          key: native-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
           save-if: false
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
@@ -250,7 +255,8 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: release-${{ matrix.platform }}
+          key: release-${{ matrix.platform }}-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: cross toolchain
         if: matrix.xwin
