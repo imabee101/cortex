@@ -1,0 +1,5 @@
+[
+  {"category": "features", "description": "Runs against `https://llm.imabee.com` and a local llama.cpp model.", "breaking_change": false},
+  {"category": "features", "description": "Server-side web search; `cortex update` and the install script come from the same host.", "breaking_change": false},
+  {"category": "breaking", "description": "Image generation, video generation and voice dictation are not available.", "breaking_change": false}
+]

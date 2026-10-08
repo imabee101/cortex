@@ -1,0 +1,11 @@
+# Advisories the audit gate accepts, each with the reason. Everything else fails the build.
+[advisories]
+ignore = [
+    # quick-xml 0.39 is a build-time proc-macro dependency of wayland-scanner; it parses protocol XML
+    # shipped in that crate and is never linked into a Cortex binary.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # rsa 0.9 (Marvin timing attack) has no fixed release. cortex-api uses it only to sign tokens with
+    # its own key; there is no decryption oracle.
+    "RUSTSEC-2023-0071",
+]

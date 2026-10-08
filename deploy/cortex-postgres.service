@@ -1,0 +1,19 @@
+[Unit]
+Description=PostgreSQL for cortex-api (loopback only)
+After=network.target
+
+[Service]
+User=imma
+RuntimeDirectory=postgresql
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/postgres -D /usr/local/pgsql/data
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

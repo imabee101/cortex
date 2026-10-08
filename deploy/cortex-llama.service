@@ -1,0 +1,20 @@
+[Unit]
+Description=llama-server for cortex-api (127.0.0.1:8080, bearer token)
+After=network-online.target
+Wants=network-online.target
+# serve.sh binds the public address when TLS is configured; this unit must never.
+Conflicts=llm.service
+
+[Service]
+User=imma
+# Reuses the llm project's launcher, which checks the model size and builds the
+# argv from the pinned profile. Empty TLS values keep it on loopback.
+# The model is Cortex's own setting: the launcher's default profile moves with the llm project.
+Environment=MODEL_PROFILE=qwen3.5-9b-uncensored HOST=127.0.0.1 PORT=8080 TLS_CERT= TLS_KEY= API_KEY_FILE=/etc/llm/api-key
+ExecStart=/home/imma/projects/llm/scripts/serve.sh run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

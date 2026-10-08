@@ -1,0 +1,2 @@
+# The release workflow's runner user: repoint the live binary and restart the service, nothing else.
+cortex-deploy ALL=(root) NOPASSWD: /usr/bin/ln -sfn /opt/cortex/releases/* /opt/cortex/current, /usr/bin/systemctl restart cortex-api.service

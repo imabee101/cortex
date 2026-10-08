@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.DS_Store
+CLAUDE.md
+CLAUDE.local.md
+REPORT.md

@@ -1,0 +1,493 @@
+# Auto-generated workspace root. Prefer editing per-crate Cargo.toml files.
+
+[patch.crates-io]
+async-openai = { git = "https://github.com/our-forks/async-openai.git", rev = "95b52ebdedf42143083cf3d6f0e0be7c84e9c808" }
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/build/cortex-proto-build",
+    "crates/codegen/ptyctl",
+    "crates/codegen/ptyctl-cli",
+    "crates/codegen/cortex-acp-lib",
+    "crates/codegen/cortex-agent-lifecycle",
+    "crates/codegen/cortex-chat-state",
+    "crates/codegen/cortex-codebase-graph",
+    "crates/codegen/cortex-compaction-transcript",
+    "crates/codegen/cortex-crash-handler",
+    "crates/codegen/cortex-dirs",
+    "crates/codegen/cortex-fast-worktree",
+    "crates/codegen/cortex-file-utils",
+    "crates/codegen/cortex-fsnotify",
+    "crates/codegen/cortex-fuzzy-file-search",
+    "crates/codegen/cortex-gix-status",
+    "crates/codegen/cortex-active-sessions",
+    "crates/codegen/cortex-agent",
+    "crates/codegen/cortex-announcements",
+    "crates/codegen/cortex-auth",
+    "crates/codegen/cortex-bundle",
+    "crates/codegen/cortex-cloud-config",
+    "crates/codegen/cortex-config",
+    "crates/codegen/cortex-config-types",
+    "crates/codegen/cortex-dashboard-store",
+    "crates/codegen/cortex-diag-server",
+    "crates/codegen/cortex-egress-proxy",
+    "crates/codegen/cortex-env",
+    "crates/codegen/cortex-external-agent-migration",
+    "crates/codegen/cortex-extra-ca",
+    "crates/codegen/cortex-feedback",
+    "crates/codegen/cortex-file-lock",
+    "crates/codegen/cortex-foreign-sessions",
+    "crates/codegen/cortex-gboom",
+    "crates/codegen/cortex-hooks",
+    "crates/codegen/cortex-http",
+    "crates/codegen/cortex-image",
+    "crates/codegen/cortex-lifecycle",
+    "crates/codegen/cortex-login",
+    "crates/codegen/cortex-markdown",
+    "crates/codegen/cortex-markdown-core",
+    "crates/codegen/cortex-mcp",
+    "crates/codegen/cortex-memory",
+    "crates/codegen/cortex-mermaid",
+    "crates/codegen/cortex-models",
+    "crates/codegen/cortex-otel",
+    "crates/codegen/cortex-pager",
+    "crates/codegen/cortex-pager-bin",
+    "crates/codegen/cortex-pager-diff",
+    "crates/codegen/cortex-pager-minimal",
+    "crates/codegen/cortex-pager-pty-harness",
+    "crates/codegen/cortex-pager-render",
+    "crates/codegen/cortex-paths",
+    "crates/codegen/cortex-permission-rules",
+    "crates/codegen/cortex-plugin-marketplace",
+    "crates/codegen/cortex-sampler",
+    "crates/codegen/cortex-sampling-types",
+    "crates/codegen/cortex-sandbox",
+    "crates/codegen/cortex-secrets",
+    "crates/codegen/cortex-session-events",
+    "crates/codegen/cortex-session-search",
+    "crates/codegen/cortex-shared",
+    "crates/codegen/cortex-shell",
+    "crates/codegen/cortex-shell-base",
+    "crates/codegen/cortex-shell-session-support",
+    "crates/codegen/cortex-shell-terminal",
+    "crates/codegen/cortex-status-line",
+    "crates/codegen/cortex-subagent-resolution",
+    "crates/codegen/cortex-telemetry",
+    "crates/codegen/cortex-test-support",
+    "crates/codegen/cortex-tools",
+    "crates/codegen/cortex-tools-api",
+    "crates/codegen/cortex-update",
+    "crates/codegen/cortex-version",
+    "crates/codegen/cortex-voice",
+    "crates/codegen/cortex-workspace",
+    "crates/codegen/cortex-workspace-client",
+    "crates/codegen/cortex-workspace-daemon",
+    "crates/codegen/cortex-workspace-types",
+    "crates/codegen/cortex-hooks-plugins-types",
+    "crates/codegen/cortex-hunk-tracker",
+    "crates/codegen/cortex-mixpanel",
+    "crates/codegen/cortex-prompt-queue",
+    "crates/codegen/cortex-ratatui-inline",
+    "crates/codegen/cortex-ratatui-textarea",
+    "crates/codegen/cortex-sqlite-journal",
+    "crates/codegen/cortex-system-power",
+    "crates/codegen/cortex-token-estimation",
+    "crates/codegen/cortex-tracing-macros",
+    "crates/codegen/cortex-tty-utils",
+    "crates/codegen/cortex-workflow",
+    "crates/common/cortex-circuit-breaker",
+    "crates/common/cortex-computer-hub-core",
+    "crates/common/cortex-computer-hub-mcp-adapter",
+    "crates/common/cortex-computer-hub-sdk",
+    "crates/common/cortex-compaction",
+    "crates/common/cortex-interjection-core",
+    "crates/common/cortex-message-delivery-core",
+    "crates/common/cortex-test-utils",
+    "crates/common/cortex-tool-protocol",
+    "crates/common/cortex-tool-runtime",
+    "crates/common/cortex-tool-types",
+    "crates/common/cortex-tracing",
+    "prod/mc/cli-chat-proxy-types",
+    "third_party/dagre_rust",
+    "third_party/graphlib_rust",
+    "third_party/mermaid-to-svg",
+    "third_party/ordered_hashmap",
+    "cortex-api",
+]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+agent-client-protocol = { version = "0.10.4", features = ["unstable"] }
+alacritty_terminal = "0.26.0"
+ansi-to-tui = "7.0.0"
+ansi-width = "0.1"
+anstyle = "1.0"
+anstyle-lossy = "1.1.4"
+anstyle-parse = "0.2"
+anstyle-syntect = "1.0.4"
+anyhow = { version = "1", features = ["backtrace"] }
+arboard = "3.6"
+arc-swap = "1.7"
+assert_matches = "1.5.0"
+async-compression = { version = "0.4.17", default-features = false, features = ["gzip", "zstd", "tokio"] }
+async-lsp = { version = "0.2.3", features = ["tokio", "tracing"] }
+async-openai = { version = "0.33.0", features = ["responses"] }
+async-stream = "0.3"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros", "ws"] }
+axum-server = "0.8"
+backon = { version = "1.6" }
+backtrace = "0.3"
+base64 = "0.22"
+blake3 = "1"
+bstr = "1"
+bytes = { version = "1", features = ["serde"] }
+camino = "1.1.10"
+chrono = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = { version = "4" }
+colored_json = "5"
+core-foundation = "0.10"
+crc32fast = "1.4"
+criterion = "0.6"
+crossbeam = "0.8"
+crossterm = "0.28"
+cryptify = "3.2"
+ctor = "0.4"
+dashmap = "6"
+derive_more = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "from", "from_str", "into", "into_iterator", "as_ref", "try_into"] }
+dhat = "0.3"
+dirs = "5.0"
+documented = "0.9"
+dunce = "1"
+educe = "0.6.0"
+encoding_rs = "0.8.35"
+env_logger = "0.11"
+eventsource-stream = "0.2"
+fastrace = { version = "0.7" }
+fastrace-opentelemetry = { version = "0.18" }
+fastrace-reqwest = { version = "0.2" }
+fastrace-tonic = { version = "0.1" }
+fastrand = "2"
+filetime = "0.2.25"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+fontdb = "0.23"
+fs2 = "0.4"
+futures = "0.3"
+futures-util = "0.3"
+fuzzy-matcher = "0.3.7"
+gcloud-storage = { version = "1.3.0", default-features = false, features = ["auth", "jwt-aws-lc-rs", "external-account"] }
+gethostname = "1"
+git2 = "0.20"
+gix = { version = "0.83", default-features = false, features = ["sha1"] }
+glob = "0.3"
+globset = "0.4"
+hmac = "0.12"
+htmd = "0.5.4"
+html-escape = "0.2"
+http = "1"
+http-body-util = "0.1"
+httparse = "1"
+humantime-serde = "1"
+ignore = "0.4"
+image = { version = "0.25.10", default-features = false }
+indexmap = { version = "2", features = ["serde"] }
+indicatif = "0.18"
+infer = "0.19.0"
+insta = "1"
+itertools = "0.14"
+jsonschema = "0.30.0"
+kamadak-exif = "0.5"
+libc = "0.2"
+linkify = "0.10"
+lipsum = "0.9"
+log = { version = "0.4", features = ["kv", "kv_unstable"] }
+loom = "0.7"
+md5 = "0.8"
+mermaid-to-svg = { path = "third_party/mermaid-to-svg" }
+minijinja = "2.9"
+mockito = "1"
+moka = "0.12"
+nix = { version = "0.30", features = ["poll", "process", "signal", "sched", "term", "mount", "fs", "ioctl", "mman", "reboot", "user"] }
+notify = "8"
+notify-debouncer-mini = "0.6"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "5b74652" }
+num_cpus = "1"
+oauth2 = "5"
+obfstr = "0.4"
+once_cell = "1"
+opentelemetry = "0.32"
+opentelemetry-http = { version = "0.32", features = ["reqwest-blocking"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "reqwest-blocking-client", "tls-roots"] }
+opentelemetry-proto = { version = "0.32", features = ["gen-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["spec_unstable_metrics_views"] }
+parking_lot = "0.12.4"
+pbjson-build = "0.9"
+pdf_oxide = { version = "0.3.43", features = ["rendering"] }
+petgraph = { version = "0.6.5", default-features = false, features = ["serde-1", "stable_graph"] }
+portable-pty = "0.9"
+pprof = "0.15"
+pretty_assertions = "1"
+prometheus = { version = "0.14", features = ["process"] }
+prost = "0.14"
+prost-build = "0.14"
+prost-reflect = "0.16"
+pulldown-cmark = "0.13"
+quick-xml = "0.41"
+rand = "0.9"
+ratatui = { version = "0.29" }
+ratatui-core = "0.1"
+rayon = "1"
+rcgen = { version = "0.13", features = ["pem"] }
+reflink-copy = "0.1"
+regex = "1"
+reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json", "multipart", "http2", "blocking", "socks"], default-features = false }
+reqwest-middleware = { version = "0.4.1", features = ["json", "multipart"] }
+resvg = { version = "0.47", default-features = false, features = ["text"] }
+rhai = { version = "1.25", features = ["serde"] }
+ring = "0.17"
+rsa = "0.9"
+rstest = "0.25"
+runfiles = "0.1"
+rustc-hash = "2"
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-native-certs = "0.8"
+same-file = "1"
+schemars = "1"
+scraper = "0.23"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_path_to_error = "0.1"
+serde_yaml = "0.9"
+serial_test = "3"
+sha1 = "0.10"
+sha2 = { version = "0.10", features = ["force-soft"] }
+shlex = "1"
+signal-hook = "0.3"
+similar = "2.7"
+siphasher = "1"
+smallvec = "1"
+strip-ansi-escapes = "0.2.1"
+strum = { version = "0.27", features = ["derive"] }
+subtle = "2"
+supports-color = "3.0"
+syntect = { version = "5.3", default-features = false, features = ["default-onig"] }
+tar = "0.4"
+tempfile = "3"
+terminput = "0.3"
+termwiz = { version = "0.23", default-features = false }
+textwrap = "0.16"
+thiserror = "2"
+tikv-jemalloc-ctl = "0.7"
+tikv-jemalloc-sys = "0.7"
+tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+time = "0.3"
+tiny-skia = "0.12"
+tokio = { version = "1", features = ["full"] }
+tokio-retry = "0.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+tokio-tungstenite = "0.28"
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "0.9"
+toml_edit = "0.22"
+tonic = { version = "0.14", features = ["tls-aws-lc", "gzip", "deflate", "zstd"] }
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = "0.5"
+tower-http = "0.6"
+tracing = "0.1"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "smallvec", "tracing-log", "std", "ansi"] }
+tree-sitter = "0.26"
+ts-rs = "12.0"
+tui-scrollbar = "0.2"
+two-face = { version = "0.4", default-features = false, features = ["syntect-onig"] }
+unicode-bidi = "0.3"
+unicode-bidi-mirroring = "0.4"
+unicode-normalization = "0.1"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2"
+url = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["serde", "v4", "v5"] }
+vte = "0.15.0"
+wait-timeout = "0.2"
+walkdir = "2"
+webbrowser = { version = "1.0.4" }
+webpki-roots = "0.26"
+which = "8"
+whoami = "1.4"
+wildmatch = "2"
+windows = { version = "0.61", features = ["Win32_Security", "Win32_Security_Authorization", "Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_System_Pipes"] }
+wiremock = "0.6"
+wl-clipboard-rs = "0.9"
+cortex-acp-lib = { path = "crates/codegen/cortex-acp-lib" }
+cortex-agent-lifecycle = { path = "crates/codegen/cortex-agent-lifecycle" }
+cortex-circuit-breaker = { path = "crates/common/cortex-circuit-breaker" }
+cortex-compaction-transcript = { path = "crates/codegen/cortex-compaction-transcript" }
+cortex-computer-hub-core = { path = "crates/common/cortex-computer-hub-core" }
+cortex-computer-hub-sdk = { path = "crates/common/cortex-computer-hub-sdk" }
+cortex-dirs = { path = "crates/codegen/cortex-dirs" }
+cortex-fuzzy-file-search = { path = "crates/codegen/cortex-fuzzy-file-search" }
+cortex-gix-status = { path = "crates/codegen/cortex-gix-status" }
+cortex-active-sessions = { path = "crates/codegen/cortex-active-sessions" }
+cortex-agent = { path = "crates/codegen/cortex-agent" }
+cortex-announcements = { path = "crates/codegen/cortex-announcements" }
+cortex-auth = { path = "crates/codegen/cortex-auth" }
+cortex-bundle = { path = "crates/codegen/cortex-bundle" }
+cortex-cloud-config = { path = "crates/codegen/cortex-cloud-config" }
+cortex-config = { path = "crates/codegen/cortex-config" }
+cortex-config-types = { path = "crates/codegen/cortex-config-types" }
+cortex-dashboard-store = { path = "crates/codegen/cortex-dashboard-store" }
+cortex-diag-server = { path = "crates/codegen/cortex-diag-server" }
+cortex-env = { path = "crates/codegen/cortex-env" }
+cortex-external-agent-migration = { path = "crates/codegen/cortex-external-agent-migration" }
+cortex-extra-ca = { path = "crates/codegen/cortex-extra-ca" }
+cortex-feedback = { path = "crates/codegen/cortex-feedback" }
+cortex-file-lock = { path = "crates/codegen/cortex-file-lock" }
+cortex-foreign-sessions = { path = "crates/codegen/cortex-foreign-sessions" }
+cortex-http = { path = "crates/codegen/cortex-http" }
+cortex-image = { path = "crates/codegen/cortex-image" }
+cortex-lifecycle = { path = "crates/codegen/cortex-lifecycle" }
+cortex-login = { path = "crates/codegen/cortex-login" }
+cortex-markdown = { path = "crates/codegen/cortex-markdown" }
+cortex-markdown-core = { path = "crates/codegen/cortex-markdown-core" }
+cortex-mcp = { path = "crates/codegen/cortex-mcp" }
+cortex-memory = { path = "crates/codegen/cortex-memory" }
+cortex-mermaid = { path = "crates/codegen/cortex-mermaid" }
+cortex-models = { path = "crates/codegen/cortex-models" }
+cortex-otel = { path = "crates/codegen/cortex-otel" }
+cortex-permission-rules = { path = "crates/codegen/cortex-permission-rules" }
+cortex-sampler = { path = "crates/codegen/cortex-sampler" }
+cortex-secrets = { path = "crates/codegen/cortex-secrets" }
+cortex-session-events = { path = "crates/codegen/cortex-session-events" }
+cortex-session-search = { path = "crates/codegen/cortex-session-search" }
+cortex-shared = { path = "crates/codegen/cortex-shared" }
+cortex-shell-base = { path = "crates/codegen/cortex-shell-base" }
+cortex-shell-session-support = { path = "crates/codegen/cortex-shell-session-support" }
+cortex-shell-terminal = { path = "crates/codegen/cortex-shell-terminal" }
+cortex-status-line = { path = "crates/codegen/cortex-status-line" }
+cortex-telemetry = { path = "crates/codegen/cortex-telemetry", default-features = false }
+cortex-test-support = { path = "crates/codegen/cortex-test-support" }
+cortex-tools = { path = "crates/codegen/cortex-tools" }
+cortex-tools-api = { path = "crates/codegen/cortex-tools-api" }
+cortex-version = { path = "crates/codegen/cortex-version" }
+cortex-workspace = { path = "crates/codegen/cortex-workspace", default-features = false }
+cortex-workspace-types = { path = "crates/codegen/cortex-workspace-types" }
+cortex-hooks-plugins-types = { path = "crates/codegen/cortex-hooks-plugins-types" }
+cortex-interjection-core = { path = "crates/common/cortex-interjection-core" }
+cortex-message-delivery-core = { path = "crates/common/cortex-message-delivery-core" }
+cortex-mixpanel = { path = "crates/codegen/cortex-mixpanel" }
+cortex-prompt-queue = { path = "crates/codegen/cortex-prompt-queue" }
+cortex-proto-build = { path = "crates/build/cortex-proto-build" }
+cortex-ratatui-inline = { path = "crates/codegen/cortex-ratatui-inline" }
+cortex-ratatui-textarea = { path = "crates/codegen/cortex-ratatui-textarea" }
+cortex-sqlite-journal = { path = "crates/codegen/cortex-sqlite-journal" }
+cortex-system-power = { path = "crates/codegen/cortex-system-power" }
+cortex-test-utils = { path = "crates/common/cortex-test-utils" }
+cortex-token-estimation = { path = "crates/codegen/cortex-token-estimation" }
+cortex-tool-protocol = { path = "crates/common/cortex-tool-protocol" }
+cortex-tool-runtime = { path = "crates/common/cortex-tool-runtime" }
+cortex-tool-types = { path = "crates/common/cortex-tool-types" }
+cortex-tracing = { path = "crates/common/cortex-tracing" }
+cortex-tty-utils = { path = "crates/codegen/cortex-tty-utils" }
+zbus = { version = "5" }
+zip = "3"
+zstd = "0.13"
+
+[profile.release]
+incremental = true
+panic = "abort"
+
+# Hardened release profile for shipping to end users (alpha + stable).
+# Use `cargo build --profile release-dist` for distribution builds.
+# Not used by default `--release` to avoid slowing down local dev builds (~2.2x).
+#
+# Hardening: thin LTO for cross-crate optimization with reasonable link times,
+# codegen-units=1 maximizes optimization (whole-program analysis, no CGU boundaries).
+# debug=1 emits line-tables DWARF; strip=false keeps symbols so CI can extract
+# .debug sidecars (Linux) or .dSYM bundles (macOS) before stripping post-build.
+# Linker flags (RELRO, NX stack) are set per-target in .cargo/config.toml.
+[profile.release-dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = false
+debug = 1
+split-debuginfo = "off"
+
+# Production profile for latency-sensitive x-product services (VF, home-mixer).
+# Thin LTO gives ~90% of full LTO benefit at significantly faster link time.
+# Keeps symbols + line tables for prod debuggability (perf, flamegraph, stack traces).
+[profile.x-prod]
+inherits = "release"
+lto = "thin"
+strip = false
+codegen-units = 1
+debug = "line-tables-only"
+panic = "unwind"
+
+# Desktop release profile. Functionally identical to release-dist — kept as a
+# named alias so the desktop workflow can reference it without coupling to the
+# CLI pipeline's profile name. Alpha and stable share a single release-dist
+# profile so that stable promotion can pointer-swap the alpha binary without
+# rebuilding.
+[profile.release-dist-jemalloc]
+inherits = "release-dist"
+# All settings now match the parent — this is an intentional alias.
+
+# Size-optimized profile for prod-admin-cli distribution builds. Cargo ignores
+# profiles in non-root manifests, so this lives here instead of the CLI crate.
+[profile.admin-cli-dist]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+panic = "abort"
+split-debuginfo = "unpacked"
+codegen-units = 128
+debug = "line-tables-only"
+opt-level = 0
+lto = false
+incremental = true
+
+# Skip debug info for non-workspace dependencies; workspace crates keep line-tables-only.
+[profile.dev.package."*"]
+debug = false
+
+[profile.bench]
+debug = true
+
+[workspace.lints.clippy]
+# prost 0.14 renders proto doc-comment bullet lists in a way that trips this
+# lint on generated code. Kept in sync with bazel/lint/linters.bzl.
+doc_lazy_continuation = "allow"
+doc_overindented_list_items = "allow"
+needless_lifetimes = "allow"
+single_range_in_vec_init = "allow"
+too_many_arguments = "allow"
+
+# Allow uninlined_format_args lint to prevent main from breaking after merges
+# When older branches (created before this lint was added to CI) get merged,
+# they pass their own CI because their CI config doesn't include this lint check.
+# However, once merged to main, the code violates main's lint rules, causing:
+# 1. Main's CI to fail
+# 2. All new branches based off main to fail CI
+# 3. Developers having to fix lint violations from other people's merged code
+# Without a merge-queue that runs main's CI checks on the PR branch,
+# these violations slip through and break the build for everyone.
+# TODO: -> "deny" once/if merge queue enabled
+uninlined_format_args = "allow"
+
+# The `fastrace::trace(properties = { … })` proc-macro expands `"{param}"`
+# into `format!("{}", param)`, which clippy flags as useless_format.
+# Suppressed until the upstream crate fixes its codegen (fixed in 0.7.16+).
+useless_format = "allow"

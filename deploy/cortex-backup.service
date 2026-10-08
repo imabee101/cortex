@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the cortex database
+After=cortex-postgres.service
+Requires=cortex-postgres.service
+
+[Service]
+Type=oneshot
+User=imma
+ExecStart=/opt/cortex/deploy/backup.sh
+ExecStartPost=/opt/cortex/deploy/restore-test.sh
+NoNewPrivileges=yes

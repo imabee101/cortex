@@ -1,0 +1,551 @@
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]                        # feature branches are covered by their PR: no double runs
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]         # stable tag -> promote only, never compiles
+  merge_group:                              # merge queue needs an org-owned repo; dormant here
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Build number to promote to stable (no rebuild)
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  # PRs: newest push cancels the old run. main and tags: never cancelled; a newer queued run replaces
+  # an older queued one. Publish/promote/deploy also hold their own non-cancelling groups below.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: "1"
+  # "ci profile" for gates: no debug info keeps target/ and the 10 GB cache quota small. Set by env so
+  # the generated root Cargo.toml keeps upstream's profiles unchanged.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  PROTOC_VERSION: "29.3"
+  PROTOC_SHA_LINUX_X64: 3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a
+
+jobs:
+  # Stage 1, cheap, Linux only. Decides everything else: whether Rust changed and the build id.
+  # One job, not several, because GitHub bills each job rounded up to a whole minute.
+  gates:
+    if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read                     # the merged PR's minor/major label
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      build_id: ${{ steps.id.outputs.build_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: changed paths
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # Docs, deploy files and non-Rust paths skip every Rust job (and consume no build number).
+          rust_paths='^(crates/|cortex-api/|prod/|third_party/|bin/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/)'
+          if [ -z "${BASE:-}" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            rust=true
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$rust_paths"; then
+            rust=true
+          else
+            rust=false
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+      - name: build id
+        id: id
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.rust == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The CI owns the version: tags are the only source, nothing is committed. Computed once here and
+          # passed on as an output; run_number is unchanged by re-runs (run_attempt > 1).
+          stable=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)
+          IFS=. read -r major minor patch <<< "${stable:-v1.0.45}"; major=${major#v}
+          labels=$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at) | .labels[].name] | join(" ")' || true)
+          case " $labels " in
+            *" major "*) next="$((major + 1)).0.0" ;;
+            *" minor "*) next="$major.$((minor + 1)).0" ;;
+            *) next="$major.$minor.$((patch + 1))" ;;
+          esac
+          # Never go backwards: a build already published at a higher core keeps that core.
+          built=$(git tag -l 'v*-build.*' | sed 's/^v//; s/-build\..*//' | sort -V | tail -n1)
+          [ -z "$built" ] || next=$(printf '%s\n%s\n' "$next" "$built" | sort -V | tail -n1)
+          echo "build_id=$next-build.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+      - name: brand and secret scan
+        run: |
+          set -euo pipefail
+          if git grep -nIiE 'gro[k]|xa[i]|x[.]a[i]|spac[e]x' -- . ':!LICENSE' ':!THIRD-PARTY-NOTICES' ':!third_party/NOTICE' ':!crates/codegen/cortex-ratatui-*/NOTICE' ':!crates/codegen/cortex-auth/src/bearer_fragment.rs' ':!crates/codegen/cortex-shell/src/agent/subagent/tests/rest.rs'; then
+            echo "old brand token found" >&2; exit 1
+          fi
+          if git grep -nIE '(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{36,}|sk-[A-Za-z0-9]{32,})' -- . ':!THIRD-PARTY-NOTICES' ':!third_party' ':!crates/codegen/cortex-secrets'; then
+            echo "possible secret committed" >&2; exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        if: steps.changes.outputs.rust == 'true'
+        with:
+          toolchain: 1.94.0                   # = rust-toolchain.toml; the pin is also the MSRV
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.changes.outputs.rust == 'true'
+        with:
+          key: gates
+          save-if: ${{ github.ref == 'refs/heads/main' }}   # PRs restore, never write: protects the quota
+      - name: protoc
+        if: steps.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/protoc.zip" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip"
+          echo "$PROTOC_SHA_LINUX_X64  $RUNNER_TEMP/protoc.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/protoc.zip" -d "$RUNNER_TEMP/protoc"
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        if: steps.changes.outputs.rust == 'true'
+        with:
+          tool: cargo-audit
+      - name: fmt, clippy, check, audit
+        if: steps.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          # Lint scope is cortex-api: harness crates stay rebrand-only, so they are compile-checked, not linted.
+          cargo fmt -p cortex-api --check
+          cargo clippy -p cortex-api --all-targets --locked -- -D warnings
+          cargo check -p cortex-pager-bin --locked
+          cargo audit
+
+  # Stage 2, medium, Linux only. Skipped for drafts and non-Rust changes. Tests and coverage share one
+  # instrumented compile (llvm-cov nextest); doctests need their own compile by design.
+  tests:
+    needs: gates
+    if: needs.gates.outputs.rust == 'true' && github.event.pull_request.draft != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: runner
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: cortex_api_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U runner" --health-interval 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.94.0
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+      - name: tests with coverage
+        run: |
+          set -euo pipefail
+          for db in cortex_api_infer cortex_api_phase4; do psql postgres://127.0.0.1/cortex_api_test -c "CREATE DATABASE $db"; done
+          cargo llvm-cov nextest -p cortex-api --locked --lcov --output-path lcov.info
+          cargo test -p cortex-api --doc --locked
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: lcov.info
+          retention-days: 7
+
+  # Stage 3, expensive, merge queue only (dormant on this personal-account repo). Native macOS runs the
+  # updater's platform paths that Linux cannot exercise. No native Windows job: upstream's proto build
+  # helper is Unix-only, so Windows can only be cross-built, not natively tested, without upstream edits.
+  native:
+    needs: tests
+    if: github.event_name == 'merge_group'
+    runs-on: macos-15                         # 10x minute multiplier: only ever in the merge queue
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.94.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: native
+          save-if: false
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest
+      - run: brew install protobuf && cargo nextest run -p cortex-update --locked
+
+  # Stage 4, release build: main only, Rust changed, every gate green. One build per target, never
+  # repeated elsewhere: publish and promote only move these artifacts.
+  build:
+    needs: [gates, tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gates.outputs.rust == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      BUILD_ID: ${{ needs.gates.outputs.build_id }}
+      CORTEX_VERSION: ${{ needs.gates.outputs.build_id }}   # stamped into the binary and --version
+      CARGO_PROFILE_RELEASE_DIST_DEBUG: "0"                  # shipped binary is stripped; DWARF only costs time and cache
+    strategy:
+      matrix:
+        include:
+          - platform: linux-x86_64          # native, cheapest x86 runner; also builds cortex-api
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            protoc: linux-x86_64
+            protoc_sha: 3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a
+          - platform: linux-aarch64         # native ARM: cheaper per minute than x86 and no cross toolchain
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            protoc: linux-aarch_64
+            protoc_sha: 6427349140e01f06e049e707a58709a4f221ae73ab9a0425bc4a00c8d0e1ab32
+            rustflags: -C target-cpu=generic -C force-unwind-tables=yes   # repo pins neoverse-v2 for dev hosts
+          - platform: windows-x86_64        # cross-compiled on Linux (cargo-xwin): Linux minutes, not 2x Windows
+            os: ubuntu-24.04
+            target: x86_64-pc-windows-msvc
+            protoc: linux-x86_64
+            protoc_sha: 3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a
+            xwin: true
+            exe: .exe
+          - platform: macos-aarch64         # native only because it links Apple frameworks (-ObjC)
+            os: macos-15
+            target: aarch64-apple-darwin
+            protoc: osx-aarch_64
+            protoc_sha: 2b8a3403cd097f95f3ba656e14b76c732b6b26d7f183330b11e36ef2bc028765
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.94.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        if: matrix.xwin
+        with:
+          tool: cargo-xwin
+      - name: protoc
+        env:
+          ASSET: ${{ matrix.protoc }}
+          SHA: ${{ matrix.protoc_sha }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/protoc.zip" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-$ASSET.zip"
+          [ "$(shasum -a 256 "$RUNNER_TEMP/protoc.zip" | cut -d' ' -f1)" = "$SHA" ]
+          unzip -q "$RUNNER_TEMP/protoc.zip" -d "$RUNNER_TEMP/protoc"
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc" >> "$GITHUB_ENV"
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+          XWIN: ${{ matrix.xwin }}
+          PORTABLE: ${{ matrix.rustflags }}
+        run: |
+          set -euo pipefail
+          [ -z "$PORTABLE" ] || export RUSTFLAGS="$PORTABLE"
+          build=(build); [ "$XWIN" = true ] && build=(xwin build)
+          cargo "${build[@]}" --profile release-dist --locked --target "$TARGET" -p cortex-pager-bin --features release-dist
+          if [ "$TARGET" = x86_64-unknown-linux-gnu ]; then cargo build --release --locked --target "$TARGET" -p cortex-api; fi
+      - name: package
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          set -euo pipefail
+          mkdir out
+          bin="out/cortex-$BUILD_ID-$PLATFORM$EXE"
+          cp "target/$TARGET/release-dist/cortex-pager$EXE" "$bin"
+          case "$PLATFORM" in linux-*) strip "$bin" ;; macos-*) strip -x "$bin" ;; esac
+          # Native legs prove the stamp; the Windows exe is cross-built and has no runner to execute it.
+          [ -n "$EXE" ] || "./$bin" --version | grep -q "^cortex $BUILD_ID "
+          zstd -19 -q -T0 -k "$bin"
+          [ "$TARGET" != x86_64-unknown-linux-gnu ] || install -m 0755 "target/$TARGET/release/cortex-api" "out/cortex-api-$BUILD_ID-linux-x86_64"
+          (cd out && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cortex-${{ env.BUILD_ID }}-${{ matrix.platform }}
+          path: out/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  # Stage 5, publish: runs once, after every target built. Moves artifacts unchanged; compiles nothing.
+  publish:
+    needs: [gates, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: publish
+      cancel-in-progress: false               # never cut off a tag or release halfway
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      BUILD_ID: ${{ needs.gates.outputs.build_id }}
+      TAG: v${{ needs.gates.outputs.build_id }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cortex-${{ env.BUILD_ID }}-*
+          path: art
+          merge-multiple: true
+      - name: checksums and changelog
+        env:
+          SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          cd art
+          for f in *.sha256; do sha256sum -c "$f"; done
+          cat ./*.sha256 | sed 's#  \*\?#  #' > SHA256SUMS && rm ./*.sha256
+          # The harness's update flow reads changelogs/<version>.external.{md,json}.
+          title=${SUBJECT%%$'\n'*}
+          printf '# Cortex %s\n\n- %s\n' "$BUILD_ID" "$title" > "$BUILD_ID.external.md"
+          jq -n --arg d "$title" '[{category: "features", description: $d, breaking_change: false}]' > "$BUILD_ID.external.json"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: art/SHA256SUMS
+      - name: tag and pre-release (idempotent)
+        run: |
+          set -euo pipefail
+          # Created only now, after every gate and build passed, on the exact commit. A re-run finds the
+          # tag and release and only refreshes the assets.
+          if sha=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null); then
+            [ "$sha" = "$GITHUB_SHA" ] || { echo "$TAG points at $sha, not $GITHUB_SHA" >&2; exit 1; }
+          else
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" art/* --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" art/* --repo "$REPO" --verify-tag --prerelease \
+              --title "Cortex $BUILD_ID" --generate-notes
+          fi
+
+  # Promote path: workflow_dispatch(build_number) or a pushed stable tag vX.Y.Z. Downloads the build's
+  # release, verifies checksums, republishes the same bytes as the stable release. No compilation.
+  promote:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      build_id: ${{ steps.pick.outputs.build_id }}
+      stable: ${{ steps.pick.outputs.stable }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      NUMBER: ${{ inputs.build_number }}
+    steps:
+      - name: pick the build
+        id: pick
+        run: |
+          set -euo pipefail
+          tags=$(gh release list --repo "$REPO" --limit 200 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName')
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            tag=$(grep -E -- "-build\.$NUMBER\$" <<< "$tags" | head -n1)
+            [ -n "$tag" ] || { echo "no pre-release for build $NUMBER" >&2; exit 1; }
+            stable=${tag%-build.*}
+          else
+            stable=$GITHUB_REF_NAME
+            # The newest build of exactly the commit the stable tag points at.
+            tag=""
+            while read -r t; do
+              [ "$(gh api "repos/$REPO/commits/$t" --jq .sha)" = "$GITHUB_SHA" ] && { tag=$t; break; }
+            done < <(grep -E "^$stable-build\.[0-9]+\$" <<< "$tags" | sort -V -r)
+            [ -n "$tag" ] || { echo "no build of $GITHUB_SHA for $stable" >&2; exit 1; }
+          fi
+          printf 'build_tag=%s\nbuild_id=%s\nstable=%s\n' "$tag" "${tag#v}" "$stable" >> "$GITHUB_OUTPUT"
+      - name: verify and republish
+        env:
+          BUILD_TAG: ${{ steps.pick.outputs.build_tag }}
+          STABLE: ${{ steps.pick.outputs.stable }}
+        run: |
+          set -euo pipefail
+          gh release download "$BUILD_TAG" --repo "$REPO" --dir art
+          (cd art && sha256sum -c SHA256SUMS)
+          sha=$(gh api "repos/$REPO/commits/$BUILD_TAG" --jq .sha)
+          gh api "repos/$REPO/git/ref/tags/$STABLE" > /dev/null 2>&1 \
+            || gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$STABLE" -f sha="$sha" > /dev/null
+          if gh release view "$STABLE" --repo "$REPO" > /dev/null 2>&1; then
+            echo "$STABLE already released; nothing to do"
+          else
+            gh release create "$STABLE" art/* --repo "$REPO" --verify-tag --latest \
+              --title "Cortex $STABLE" --notes "Promoted from build ${BUILD_TAG#v} without rebuilding. Install: \`curl -fsSL https://llm.imabee.com/cli/install.sh | bash\`"
+          fi
+
+  # Users get only promoted builds: publishes them to the harness's update flow on the production host.
+  deploy:
+    needs: promote
+    runs-on: [self-hosted, cortex-prod]
+    environment: production
+    timeout-minutes: 45
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.promote.outputs.build_id }}
+      STABLE: ${{ needs.promote.outputs.stable }}
+      DIST: /opt/cortex/dist
+      BASE: https://llm.imabee.com/cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: crates/codegen/cortex-pager/scripts
+          persist-credentials: false
+      - name: download and verify
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          A=$RUNNER_TEMP/art; mkdir -p "$A"; cd "$A"
+          url="https://github.com/$REPO/releases/download/$STABLE"
+          curl -fsSL --retry 3 -O "$url/SHA256SUMS"
+          for f in $(awk '{print $2}' SHA256SUMS) "$VERSION.external.md" "$VERSION.external.json"; do
+            curl -fsSL --retry 3 -O "$url/$f"
+          done
+          sha256sum -c SHA256SUMS
+          for p in linux-x86_64 linux-aarch64 macos-aarch64 windows-x86_64; do
+            f="cortex-$VERSION-$p"; [ "$p" = windows-x86_64 ] && f="$f.exe"
+            [ -s "$f" ] && [ -s "$f.zst" ] || { echo "missing $f" >&2; exit 1; }
+          done
+          chmod +x "cortex-$VERSION-linux-$(uname -m)" "cortex-api-$VERSION-linux-x86_64"
+          "./cortex-$VERSION-linux-$(uname -m)" --version < /dev/null | grep -q "^cortex $VERSION "
+      - name: publish to the update feed
+        run: |
+          set -euo pipefail
+          A=$RUNNER_TEMP/art
+          S=crates/codegen/cortex-pager/scripts
+          put() { install -m 0644 "$1" "$2.part" && mv -f "$2.part" "$2"; }
+          for f in "$A"/cortex-"$VERSION"-*; do put "$f" "$DIST/${f##*/}"; done
+          for f in "$A/$VERSION".external.*; do put "$f" "$DIST/changelogs/${f##*/}"; done
+          for f in install.sh install.ps1 install-enterprise.sh install-enterprise.ps1; do put "$S/$f" "$DIST/$f"; done
+      - name: switch cortex-api
+        run: |
+          set -euo pipefail
+          printf 'PREV_REL=%s\nPREV_VER=%s\n' \
+            "$(readlink -f /opt/cortex/current)" "$(tr -d '[:space:]' < "$DIST/stable" 2>/dev/null || true)" > "$RUNNER_TEMP/prev.env"
+          rel=/opt/cortex/releases/$(date -u +%Y%m%dT%H%M%SZ)
+          install -d "$rel"
+          install -m 0755 "$RUNNER_TEMP/art/cortex-api-$VERSION-linux-x86_64" "$rel/cortex-api"
+          touch "$RUNNER_TEMP/api-switched"
+          sudo -n /usr/bin/ln -sfn "$rel" /opt/cortex/current
+          sudo -n /usr/bin/systemctl restart cortex-api.service
+          for _ in $(seq 150); do curl -sf -m 2 http://127.0.0.1:8787/readyz > /dev/null && exit 0; sleep 2; done
+          echo "cortex-api did not become ready" >&2
+          exit 1
+      - name: point stable at the build
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$VERSION" > "$DIST/stable.part"
+          chmod 0644 "$DIST/stable.part"
+          mv -f "$DIST/stable.part" "$DIST/stable"
+      - name: verify through the public update flow
+        run: |
+          set -euo pipefail
+          A=$RUNNER_TEMP/art
+          [ "$(curl -fsS -m 15 "$BASE/stable" | tr -d '[:space:]')" = "$VERSION" ]
+          for p in linux-x86_64 linux-aarch64 macos-aarch64 windows-x86_64; do
+            f="cortex-$VERSION-$p"; [ "$p" = windows-x86_64 ] && f="$f.exe"
+            for name in "$f" "$f.zst"; do
+              head=$(curl -sI -m 30 "$BASE/$name")
+              grep -q '^HTTP/[0-9.]* 200' <<< "$head" || { echo "$name is not served" >&2; exit 1; }
+              [ "$(awk 'tolower($1)=="content-length:"{print $2+0}' <<< "$head")" = "$(stat -c%s "$A/$name")" ] \
+                || { echo "$name: served size differs" >&2; exit 1; }
+            done
+            [ "$(curl -s -o /dev/null -w '%{http_code}' -m 30 -r 0-9 "$BASE/$f.zst")" = 206 ] \
+              || { echo "$f.zst: byte ranges not honoured" >&2; exit 1; }
+          done
+          curl -fsS -m 15 "$BASE/changelogs/$VERSION.external.json" | jq -e 'type == "array" and length > 0' > /dev/null
+          for s in install.sh install.ps1; do curl -fsS -m 15 -o /dev/null "$BASE/$s"; done
+          # The real thing: the previous build updates itself to this one through the harness's own flow.
+          PREV_VER=""
+          . "$RUNNER_TEMP/prev.env"
+          prev="$DIST/cortex-$PREV_VER-linux-$(uname -m)"
+          if [ -n "$PREV_VER" ] && [ -f "$prev" ]; then
+            home=$(mktemp -d)
+            mkdir -p "$home/.cortex/downloads" "$home/.cortex/bin"
+            install -m 0755 "$prev" "$home/.cortex/downloads/${prev##*/}"
+            ln -s "../downloads/${prev##*/}" "$home/.cortex/bin/cortex"
+            HOME=$home CORTEX_HOME=$home/.cortex timeout 300 "$home/.cortex/bin/cortex" update < /dev/null > "$home/update.log" 2>&1 \
+              || { tail -n 20 "$home/update.log" >&2; exit 1; }
+            HOME=$home CORTEX_HOME=$home/.cortex "$home/.cortex/bin/cortex" --version < /dev/null | grep -q "^cortex $VERSION " \
+              || { tail -n 20 "$home/update.log" >&2; echo "update did not land $VERSION" >&2; exit 1; }
+            rm -rf "$home"
+          fi
+      - name: prune old builds
+        run: |
+          set -euo pipefail
+          keep=$(for f in "$DIST"/cortex-*-linux-x86_64; do v=${f##*/cortex-}; echo "${v%-linux-x86_64}"; done | sort -V | tail -n 3)
+          for f in "$DIST"/cortex-*-linux-* "$DIST"/cortex-*-macos-* "$DIST"/cortex-*-windows-*; do
+            [ -e "$f" ] || continue
+            v=${f##*/cortex-}; v=${v%-linux-*}; v=${v%-macos-*}; v=${v%-windows-*}
+            grep -qxF "$v" <<< "$keep" && continue
+            rm -f "$f" "$DIST/changelogs/$v.external.md" "$DIST/changelogs/$v.external.json"
+          done
+          find /opt/cortex/releases -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n +6 | cut -d' ' -f2- | xargs -r rm -rf
+      - name: roll back
+        if: failure()
+        run: |
+          set -uo pipefail
+          [ -f "$RUNNER_TEMP/prev.env" ] || exit 0
+          PREV_REL="" PREV_VER=""
+          . "$RUNNER_TEMP/prev.env"
+          if [ -n "$PREV_VER" ]; then
+            printf '%s\n' "$PREV_VER" > "$DIST/stable.part" && mv -f "$DIST/stable.part" "$DIST/stable"
+          else
+            rm -f "$DIST/stable"
+          fi
+          if [ -f "$RUNNER_TEMP/api-switched" ] && [ -d "$PREV_REL" ]; then
+            sudo -n /usr/bin/ln -sfn "$PREV_REL" /opt/cortex/current
+            sudo -n /usr/bin/systemctl restart cortex-api.service
+          fi
+          echo "rolled back to ${PREV_VER:-the configured version}" >&2
+
+  # Single required status check for branch protection and auto-merge.
+  ci-ok:
+    if: always() && github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
+    needs: [gates, tests, native, build, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$RESULTS"

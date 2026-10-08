@@ -1,0 +1,281 @@
+# Getting Started
+
+Cortex Build is a terminal-based AI coding assistant from Cortex. It runs as a TUI (Terminal User Interface) that understands your codebase, executes shell commands, edits files, searches the web, and manages tasks.
+
+You can use it interactively as a full-screen TUI, run it headlessly for scripting and CI/CD, or integrate it into editors via the Agent Client Protocol (ACP).
+
+---
+
+## Installation
+
+Install the latest stable release (macOS, Linux, or Windows via Git Bash):
+
+```bash
+curl -fsSL https://llm.imabee.com/cli/install.sh | bash
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://llm.imabee.com/cli/install.sh | bash -s 0.1.42
+```
+
+On **Windows (PowerShell)**, use the native PowerShell installer:
+
+```powershell
+irm https://llm.imabee.com/cli/install.ps1 | iex
+```
+
+Install a specific version:
+
+```powershell
+$env:CORTEX_VERSION="0.1.42"; irm https://llm.imabee.com/cli/install.ps1 | iex
+```
+
+The PowerShell installer automatically adds `%USERPROFILE%\.cortex\bin` to your User PATH. Alternatively, install via [Git for Windows](https://gitforwindows.org/) (Git Bash) or MSYS2 using the bash script above. WSL users get the Linux binary automatically.
+
+Verify the installation:
+
+```bash
+cortex --version
+```
+
+Update to the latest version at any time:
+
+```bash
+cortex update
+```
+
+If you installed Cortex Build with WinGet, update it with WinGet instead. Quit
+Cortex first, then run:
+
+```powershell
+winget upgrade --id Cortex.CortexBuild -e
+```
+
+On a WinGet install, `cortex update` prints this command and changes nothing.
+The WinGet package tracks the stable channel, and new releases can take a few
+days to reach it.
+
+To fetch a repository through Grove (NFS on macOS, FUSE on Linux), enable
+`cortex clone` with `[clone] enabled = true` in Grove config, `CORTEX_CLONE=1`,
+or the enable-both convenience `CORTEX_GROVE=1` / `[cli] grove = true` in
+`~/.cortex/config.toml`:
+
+```bash
+cortex clone <url> [dir]
+```
+
+The default is a depth-1 checkout of the selected branch. Pass `--full-history`
+for a complete clone. Clone enablement is independent of session / `-w` Grove
+worktrees (the convenience above turns both on; the specific knobs still win).
+the llm.imabee.com sign-in below — see [cortex clone](27-cortex-clone.md#authentication)
+and [Configuration reference](26-config-reference.md).
+
+---
+
+## First Launch
+
+Start Cortex by running:
+
+```bash
+cortex
+```
+
+On first launch, Cortex opens your browser to authenticate with llm.imabee.com. After you sign in, Cortex stores your credentials in `~/.cortex/auth.json`, where they persist across sessions. Cortex refreshes your credentials automatically and prompts you to sign in again when they can no longer be renewed.
+
+If you prefer API key authentication (e.g., for CI/CD or environments without a browser), set the `CORTEX_API_KEY` environment variable instead:
+
+```bash
+export CORTEX_API_KEY="cortex-..."
+cortex
+```
+
+See [Authentication](02-authentication.md) for the full set of auth options including OIDC, external auth providers, and device code flow.
+
+---
+
+## Basic Interaction
+
+Once authenticated, Cortex presents a full-screen TUI with two main areas:
+
+- **Scrollback** -- the conversation history showing your prompts, Cortex's responses, tool calls, file edits, and more.
+- **Prompt** -- the input area at the bottom where you type messages.
+
+Type a message and press `Enter` to send it. Cortex reads files, runs commands, and edits code as needed. Each tool run streams into the scrollback in real time.
+
+Press `Tab` to move focus between the prompt and the scrollback. While a turn is running, `Ctrl+C` cancels it once the composer is empty — with a draft, the first press only clears it. `Esc` never cancels a turn; mid-turn it shows a reminder to use `Ctrl+C`. Idle, press `Esc` twice within 800ms to clear a non-empty prompt, or (with an empty prompt and conversation messages) to open rewind — see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape). With the scrollback focused, use the arrow keys to select entries and to collapse or expand them. To navigate with `j`/`k` and fold with `h`/`l` instead, enable Vim mode.
+
+### File References
+
+Use `@` in your prompt to attach files:
+
+```
+@src/main.rs              # Attach a file
+@src/main.rs:10-50        # Attach lines 10-50
+@src/                     # Browse a directory
+```
+
+The `@` operator opens a fuzzy file picker. By default it respects `.gitignore` and hides dotfiles. Prefix with `!` to search hidden files:
+
+```
+@!.github                 # Search hidden files
+@!.env                    # Attach a .env file
+```
+
+### Permissions
+
+By default, Cortex asks for permission before executing shell commands or editing files. You can approve individually or toggle always-approve mode:
+
+- Press `Ctrl+O` to toggle always-approve mode
+- Use the `--yolo` flag at launch: `cortex --yolo`
+- Type `/always-approve` in the prompt to toggle the mode
+
+---
+
+## Key Concepts
+
+### Sessions
+
+Every conversation is a **session**. Sessions are automatically saved to `~/.cortex/sessions/` and can be resumed later. Each session tracks the full conversation history, tool calls, file edits, and task state.
+
+- Start a new session: `Ctrl+N` or `/new`
+- Resume a previous session: `/resume` in the TUI, or `--resume <ID>` from the CLI
+- Continue the most recent session: `cortex -c`
+
+### Scrollback
+
+The scrollback is the main display area. It shows:
+
+- **User prompts** -- your messages, rendered as sticky headers
+- **Agent messages** -- Cortex's responses with full markdown rendering and syntax highlighting
+- **Thinking blocks** -- Cortex's reasoning process (collapsible)
+- **Tool calls** -- file edits (with inline diffs), command executions, search results, and more
+- **Task lists** -- TODO items tracking progress
+
+Collapse or expand the selected entry with the `Left`/`Right` arrow keys (or `h`/`l` and `e` in Vim mode). In Vim mode, press `y` to copy its content and `Y` to copy its metadata (for example, the command that ran). Press `Enter` to open it in the fullscreen viewer (in any mode).
+
+### Tools
+
+Cortex has built-in tools for:
+
+| Tool | Description |
+|------|-------------|
+| `read_file` / `search_replace` | Read and edit files with line-precise changes |
+| `grep` | Regex search across your codebase (powered by ripgrep) |
+| `list_dir` | List directory contents |
+| `run_terminal_command` | Execute shell commands |
+| `web_search` / `web_fetch` | Search the web and fetch URLs |
+| `todo_write` | Create and manage task lists |
+| `spawn_subagent` | Spawn parallel subagent sessions |
+| `memory_search` | Search cross-session memory |
+
+Tools can be extended with [MCP servers](05-configuration.md#mcp-servers) for integrations like GitHub, databases, and more.
+
+### Slash Commands
+
+Type `/` in the prompt to access commands. These provide quick actions without writing a full prompt:
+
+```
+/model cortex-4.6                 # Switch model
+/compact                          # Compress conversation history
+/always-approve                   # Toggle always-approve mode
+/new                              # Start a new session
+```
+
+See [Slash Commands](04-slash-commands.md) for the complete reference.
+
+---
+
+## Common Launch Options
+
+```bash
+# Launch the interactive TUI and submit an initial prompt as the first turn
+cortex "fix the failing auth test and run it"
+
+# Initial prompt in a new git worktree. Use --worktree=<name> (with `=`) so the
+# prompt isn't swallowed as the worktree name — `cortex -w "refactor module X"`
+# would treat "refactor module X" as the worktree label, not the prompt.
+cortex --worktree=feat "refactor module X"
+
+# Base the worktree on a specific branch (e.g. main) instead of the current HEAD:
+cortex -w --ref main "implement feature from main"
+
+
+# Start in a specific project directory
+cortex --cwd ~/projects/my-app
+
+# Add project-specific rules
+cortex --rules "Always use TypeScript. Prefer functional components."
+
+# Auto-approve all tool executions
+cortex --yolo
+
+# Use a specific model
+cortex -m cortex-4.6
+
+# Resume a previous session
+cortex --resume <session-id>
+
+# Continue the most recent session
+cortex -c
+
+# Experimental scrollback-native render mode. Sticky: plain `cortex` reopens in
+# the mode last chosen via --minimal/--fullscreen (or /minimal//fullscreen).
+cortex --minimal
+
+# Back to the standard fullscreen TUI (and make it sticky again)
+cortex --fullscreen
+
+# Headless mode (for scripts)
+cortex -p "Explain this codebase"
+```
+
+---
+
+## Headless Mode
+
+Run Cortex non-interactively for scripting, CI/CD, and automation:
+
+```bash
+cortex -p "Your prompt here"
+```
+
+Output formats:
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| `plain` | (default) | Human-readable text |
+| `json` | `--output-format json` | Single JSON object with `text`, `stopReason`, `sessionId`, and `requestId` |
+| `streaming-json` | `--output-format streaming-json` | NDJSON event stream for real-time processing |
+
+Example CI/CD usage:
+
+```bash
+cortex -p "Review changes for bugs" --output-format json --yolo | jq -r '.text'
+```
+
+---
+
+## Project Rules (AGENTS.md)
+
+Add per-project instructions by creating an `AGENTS.md` file in your repository. Cortex reads these files and injects their contents as a project-instructions message at the start of the conversation:
+
+```
+~/.cortex/AGENTS.md           # Global rules (apply to all projects)
+<repo-root>/AGENTS.md       # Repository-level rules
+<cwd>/AGENTS.md             # Directory-level rules (highest priority)
+```
+
+Deeper files take precedence. Cortex also reads `CLAUDE.md` files for compatibility.
+
+---
+
+## Where to Go Next
+
+| Document | What You Will Learn |
+|----------|-------------------|
+| [Authentication](02-authentication.md) | Browser login, API keys, OIDC, external auth, device code flow |
+| [Keyboard Shortcuts](03-keyboard-shortcuts.md) | Complete reference for all key bindings |
+| [Slash Commands](04-slash-commands.md) | All available `/` commands |
+| [Configuration](05-configuration.md) | config.toml, pager.toml, environment variables |

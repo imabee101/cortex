@@ -1,0 +1,35 @@
+{
+	admin unix//run/cortex-edge/admin.sock
+	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_body 10m
+			read_header 30s
+			write 0
+			idle 10m
+		}
+	}
+}
+
+https://llm.imabee.com {
+	bind 2804:4bd0:3b1:f200::7
+	tls /etc/llm/tls/fullchain.pem /etc/llm/tls/key.pem
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	request_body {
+		max_size 32MB
+	}
+	# Process counters are for the local scraper, not the internet.
+	@internal path /metrics
+	respond @internal 404
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+			dial_timeout 10s
+		}
+	}
+}

@@ -1,0 +1,4 @@
+bin/*.br
+bin/cortex
+bin/cortex.exe
+THIRD_PARTY_NOTICES.md

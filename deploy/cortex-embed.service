@@ -1,0 +1,23 @@
+[Unit]
+Description=llama-server embeddings for cortex-api (127.0.0.1:8081, bearer token)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=imma
+# Pinned by hash: the unit refuses to start on any other file. Runs on the CPU;
+# the GPU is held by the generation model, so the device is off, not just the layers. Qwen3-Embedding-0.6B yields 1024-dim vectors.
+ExecStartPre=/bin/sh -c 'echo "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439  /opt/cortex/models/Qwen3-Embedding-0.6B-Q8_0.gguf" | sha256sum -c --quiet -'
+ExecStart=/home/imma/projects/llm/.opt/llama.cpp/bin/llama-server \
+  --model /opt/cortex/models/Qwen3-Embedding-0.6B-Q8_0.gguf --alias Qwen3-Embedding-0.6B \
+  --embeddings --pooling last --parallel 2 --ctx-size 16384 --batch-size 8192 --ubatch-size 8192 \
+  --device none --n-gpu-layers 0 --threads 6 --host 127.0.0.1 --port 8081 --api-key-file /etc/llm/api-key
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

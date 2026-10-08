@@ -1,0 +1,38 @@
+[Unit]
+Description=cortex-api (OIDC issuer, control plane, inference gateway)
+After=network-online.target cortex-postgres.service cortex-llama.service cortex-embed.service
+Wants=cortex-postgres.service cortex-llama.service cortex-embed.service
+
+[Service]
+User=imma
+# Holds CORTEX_API_BRAVE_TOKEN only; root:imma 0640, provisioned at deploy.
+EnvironmentFile=-/etc/cortex/cortex-api.env
+Environment=CORTEX_API_DATABASE_URL=postgres://127.0.0.1/cortex
+Environment=CORTEX_API_RELEASE_VERSION=1.0.45
+# The model id is the alias the pinned llama profile serves.
+Environment=CORTEX_API_MODEL=Qwen3.5-9B-Uncensored
+# One llama slot serves everyone, so requests queue instead of failing: the harness gives up
+# after two consecutive 429s. The wait stays under the edge's 10 minute limit.
+Environment=CORTEX_API_QUEUE_MAX=256 CORTEX_API_QUEUE_WAIT_SECS=540
+Environment=CORTEX_API_INFERENCE_PER_MIN=6000 CORTEX_API_IP_RATE_PER_MIN=6000 CORTEX_API_USER_RATE_PER_MIN=6000
+Environment=CORTEX_API_DAILY_INFERENCE_QUOTA=1000000 CORTEX_API_DAILY_SEARCH_QUOTA=20000
+Environment=CORTEX_API_EMBED=http://127.0.0.1:8081 CORTEX_API_EMBED_MODEL=Qwen3-Embedding-0.6B CORTEX_API_EMBED_DIMENSIONS=1024
+ExecStart=/opt/cortex/current/cortex-api --listen 127.0.0.1:8787 --llama http://127.0.0.1:8080 --llama-api-key-file /etc/llm/api-key
+# SIGTERM starts a drain of open streams; the stop timeout is the drain window plus margin.
+KillSignal=SIGTERM
+TimeoutStopSec=930
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

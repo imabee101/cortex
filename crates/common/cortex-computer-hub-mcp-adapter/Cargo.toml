@@ -1,0 +1,30 @@
+[package]
+license = "Apache-2.0"
+name = "cortex-computer-hub-mcp-adapter"
+version = "0.1.0"
+edition.workspace = true
+description = "Bridge between MCP servers and the Cortex Computer Hub, registering MCP-discovered tools as native hub tools."
+
+[features]
+metrics = ["dep:prometheus"]
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+prometheus = { workspace = true, optional = true }
+
+cortex-tool-protocol = { workspace = true }
+cortex-tool-runtime = { workspace = true }
+cortex-tool-types = { workspace = true }
+cortex-computer-hub-sdk = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+futures = { workspace = true }
+
+[lints]
+workspace = true
