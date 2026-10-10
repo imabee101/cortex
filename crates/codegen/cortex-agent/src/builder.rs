@@ -77,7 +77,7 @@ pub struct AgentBuilder {
     task_model_slugs: Vec<String>,
     task_model_selection: TaskModelSelection,
     skills_config: crate::prompt::skills::SkillsConfig,
-    /// Which vendor (`.claude`/`.cursor`) dirs are scanned for skills / rules / AGENTS.md; the all-on default reproduces historical behavior.
+    /// Which vendor (`.claude`/`.cursor`) dirs are scanned for skills / rules / AGENTS.md; the default scans none.
     compat: cortex_tools::types::compat::CompatConfig,
     /// `[paths]` table; its `extra_rule_dirs` are scanned for rules alongside the built-in home roots.
     paths_config: crate::prompt::paths::PathsConfig,
@@ -2695,6 +2695,7 @@ mod tests {
                     config_paths: Vec::new(),
                     disabled: Vec::new(),
                     enabled: Vec::new(),
+                    claude: false,
                 },
                 &[plugin_dir],
                 false,

@@ -31,7 +31,7 @@ pub async fn discover_skills(
         skill_count = tracing::field::Empty,
     ));
     let cwd_str = root_cwd.to_string_lossy();
-    // Workspace discovery does no per-vendor compat gating; pass the all-on default
+    // No user config is loaded on this path, so the vendor defaults apply
     let skills = cortex_agent::prompt::skills::list_skills(
         Some(&cwd_str),
         config,
@@ -346,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn discover_agents_md_receives_normalized_rule_content() {
         let tmp = tempfile::tempdir().unwrap();
-        let rules_dir = tmp.path().join(".cursor").join("rules");
+        let rules_dir = tmp.path().join(".cortex").join("rules");
         fs::create_dir_all(&rules_dir).unwrap();
         fs::write(
             rules_dir.join("xyzzy-discover-agents-md-test.md"),
@@ -360,7 +360,7 @@ mod tests {
             .find(|f| {
                 f.get("file_path")
                     .and_then(|v| v.as_str())
-                    .is_some_and(|p| p.ends_with("/.cursor/rules/xyzzy-discover-agents-md-test.md"))
+                    .is_some_and(|p| p.ends_with("/.cortex/rules/xyzzy-discover-agents-md-test.md"))
             })
             .expect("should discover the rules file");
         let Some(content) = rule.get("content").and_then(|v| v.as_str()) else {
@@ -533,12 +533,12 @@ mod tests {
     #[tokio::test]
     async fn load_permissions_with_settings_file_returns_object() {
         let tmp = tempfile::tempdir().unwrap();
-        // Create a minimal .claude/settings.json with a permission rule so the test always exercises the non-null path
-        let claude_dir = tmp.path().join(".claude");
-        fs::create_dir_all(&claude_dir).unwrap();
+        // Create a minimal project .cortex/config.toml with a permission rule so the test always exercises the non-null path
+        let cortex_dir = tmp.path().join(".cortex");
+        fs::create_dir_all(&cortex_dir).unwrap();
         fs::write(
-            claude_dir.join("settings.json"),
-            r#"{"permissions":{"allow":["Bash(git status)"]}}"#,
+            cortex_dir.join("config.toml"),
+            "[permission]\nallow = [\"Bash(git status)\"]\n",
         )
         .unwrap();
 

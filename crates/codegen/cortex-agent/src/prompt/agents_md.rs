@@ -166,7 +166,7 @@ fn add_discovered_candidate(
 }
 
 /// Read Agents.md from ~/.cortex/, git repo root, and session cwd.
-/// `compat` gates which vendor directories are scanned. `CompatConfig::default()` preserves all-vendors behavior.
+/// `compat` gates which vendor directories are scanned. `CompatConfig::default()` scans no vendor directory.
 /// `project_trusted` omits project-scope files when false.
 /// Each `[paths] extra_rule_dirs` entry is scanned for direct `*.md` rules at home scope, after the built-in home
 /// roots and before project files.
@@ -213,7 +213,8 @@ const HOME_RULES_DIRS: &[&str] = &["rules"];
 pub fn has_project_instruction_markers_in<'a>(
     chain_dirs: impl IntoIterator<Item = &'a Path>,
 ) -> bool {
-    let compat = CompatConfig::default();
+    // Trust must gate every vendor's files whatever the user enabled.
+    let compat = CompatConfig::all_enabled();
     let filenames = compat.agent_filenames();
     let rules_dirs = compat.rules_dirs();
     chain_dirs.into_iter().any(|dir| {
@@ -446,7 +447,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("AGENTS.md"), "# Instructions").unwrap();
 
-        let files = find_agent_files(tmp.path(), &CompatConfig::default().agent_filenames());
+        let files = find_agent_files(tmp.path(), &CompatConfig::all_enabled().agent_filenames());
         // On case-insensitive filesystems (macOS), both "Agents.md" and "AGENTS.md" resolve to the same file, so we may get more than 1 result
         assert!(!files.is_empty());
         assert!(
@@ -460,7 +461,7 @@ mod tests {
     #[test]
     fn find_agent_files_finds_all_variants() {
         let tmp = tempfile::tempdir().unwrap();
-        let filenames = CompatConfig::default().agent_filenames();
+        let filenames = CompatConfig::all_enabled().agent_filenames();
         for name in &filenames {
             let path = tmp.path().join(name);
             if let Some(parent) = path.parent() {
@@ -476,7 +477,7 @@ mod tests {
     #[test]
     fn find_agent_files_empty_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let files = find_agent_files(tmp.path(), &CompatConfig::default().agent_filenames());
+        let files = find_agent_files(tmp.path(), &CompatConfig::all_enabled().agent_filenames());
         assert!(files.is_empty());
     }
 
@@ -484,7 +485,7 @@ mod tests {
     fn find_agent_files_nonexistent_dir() {
         let files = find_agent_files(
             Path::new("/nonexistent/dir"),
-            &CompatConfig::default().agent_filenames(),
+            &CompatConfig::all_enabled().agent_filenames(),
         );
         assert!(files.is_empty());
     }
@@ -496,7 +497,7 @@ mod tests {
         fs::create_dir_all(&claude_dir).unwrap();
         fs::write(claude_dir.join("CLAUDE.md"), "# Project instructions").unwrap();
 
-        let files = find_agent_files(tmp.path(), &CompatConfig::default().agent_filenames());
+        let files = find_agent_files(tmp.path(), &CompatConfig::all_enabled().agent_filenames());
         assert!(
             files
                 .iter()
@@ -513,7 +514,7 @@ mod tests {
         fs::write(rules_dir.join("style.md"), "# Style rules").unwrap();
         fs::write(rules_dir.join("safety.md"), "# Safety rules").unwrap();
 
-        let rules_dirs: Vec<PathBuf> = CompatConfig::default()
+        let rules_dirs: Vec<PathBuf> = CompatConfig::all_enabled()
             .rules_dirs()
             .iter()
             .map(|sub| tmp.path().join(sub))
@@ -600,7 +601,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             repo_root.to_str().unwrap(),
             Some(&user_dir),
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -629,7 +630,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             user_dir.to_str().unwrap(),
             Some(&user_dir),
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -661,7 +662,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             repo_root.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -687,7 +688,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             dir.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -733,7 +734,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             cortex_home,
             Some(home),
@@ -765,6 +766,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_compat_loads_no_vendor_instructions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cortex_home = tmp.path().join("cortex-home");
+        let home = tmp.path().join("home");
+        let cwd = tmp.path().join("project");
+        fs::create_dir_all(&cortex_home).unwrap();
+        for vendor in [".claude", ".cursor"] {
+            let vendor_home = home.join(vendor);
+            fs::create_dir_all(vendor_home.join("rules")).unwrap();
+            fs::write(
+                vendor_home.join("CLAUDE.md"),
+                format!("home {vendor} named"),
+            )
+            .unwrap();
+            fs::write(
+                vendor_home.join("rules/rule.md"),
+                format!("home {vendor} rule"),
+            )
+            .unwrap();
+            let project_vendor = cwd.join(vendor);
+            fs::create_dir_all(project_vendor.join("rules")).unwrap();
+            fs::write(
+                project_vendor.join("CLAUDE.md"),
+                format!("project {vendor} named"),
+            )
+            .unwrap();
+            fs::write(
+                project_vendor.join("rules/rule.md"),
+                format!("project {vendor} rule"),
+            )
+            .unwrap();
+        }
+        fs::write(cwd.join("CLAUDE.md"), "project root instructions").unwrap();
+
+        let configs = read_agents_config_with_roots(
+            cwd.to_str().unwrap(),
+            None,
+            CompatConfig::default(),
+            &PathsConfig::default(),
+            cortex_home,
+            Some(home),
+            /*project_trusted*/ true,
+        )
+        .await;
+        let contents: Vec<&str> = configs
+            .iter()
+            .map(|config| config.content.as_str())
+            .collect();
+        assert_eq!(contents, ["project root instructions"]);
+    }
+
+    #[tokio::test]
     async fn vendor_home_agents_and_rules_cells_are_independent() {
         let tmp = tempfile::tempdir().unwrap();
         let cortex_home = tmp.path().join("cortex-home");
@@ -779,7 +832,7 @@ mod tests {
             fs::write(vendor_home.join("rules/rule.md"), format!("{vendor}-rule")).unwrap();
         }
 
-        let mut rules_only = CompatConfig::default();
+        let mut rules_only = CompatConfig::all_enabled();
         rules_only.claude.agents = false;
         rules_only.cursor.agents = false;
         let configs = read_agents_config_with_roots(
@@ -805,7 +858,7 @@ mod tests {
             );
         }
 
-        let mut agents_only = CompatConfig::default();
+        let mut agents_only = CompatConfig::all_enabled();
         agents_only.claude.rules = false;
         agents_only.cursor.rules = false;
         let configs = read_agents_config_with_roots(
@@ -848,7 +901,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             nested.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             nested.clone(),
             None,
@@ -886,7 +939,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             repo.clone(),
             None,
@@ -920,7 +973,7 @@ mod tests {
         fs::write(repo.join("AGENTS.md"), "project-named").unwrap();
         fs::write(repo.join(".claude/rules/project.md"), "project-rule").unwrap();
 
-        let mut compat = CompatConfig::default();
+        let mut compat = CompatConfig::all_enabled();
         compat.claude.agents = false;
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
@@ -958,7 +1011,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             repo.clone(),
             None,
@@ -1019,7 +1072,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &paths,
             cortex_home,
             Some(home),
@@ -1064,7 +1117,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &paths_config([&extra]),
             cortex_home,
             None,
@@ -1095,7 +1148,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &paths_config([&shared]),
             cortex_home.clone(),
             None,
@@ -1128,7 +1181,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             cwd.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &paths_config([&home.join(".claude/rules")]),
             cortex_home.clone(),
             Some(home.clone()),
@@ -1141,7 +1194,7 @@ mod tests {
         );
 
         // The post-`/import-claude` shape: listed, compat scan off.
-        let mut compat = CompatConfig::default();
+        let mut compat = CompatConfig::all_enabled();
         compat.claude.rules = false;
         let configs = read_agents_config_with_roots(
             cwd.to_str().unwrap(),
@@ -1189,7 +1242,7 @@ mod tests {
         let configs = read_agents_config_with_roots(
             repo.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             cortex_home,
             Some(home),
@@ -1236,7 +1289,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             repo_root.to_str().unwrap(),
             Some(&user_dir),
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -1355,7 +1408,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             repo_root.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )
@@ -1390,7 +1443,7 @@ mod tests {
         let configs = read_agents_config_with_options(
             repo_root.to_str().unwrap(),
             None,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
             &PathsConfig::default(),
             /*project_trusted*/ true,
         )

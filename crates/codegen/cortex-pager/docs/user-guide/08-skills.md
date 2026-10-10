@@ -32,7 +32,7 @@ Flat `*.md` files under a `commands/` directory become user-invocable slash comm
 
 Skill and command discovery does **not** use `.gitignore`. Paths under known skill roots (`.cortex/`, `.agents/`, `.claude/`, `.cursor/`) always load when present on disk — teams often ignore `.claude/**` as local-only config while still expecting `/frontend`-style project commands to work. To hide a skill, use `[skills] ignore` in config (not repo ignore rules).
 
-Cortex scans the Claude and Cursor skill directories by default. To stop scanning a vendor, set its `skills` cell to `false` under `[compat.cursor]` or `[compat.claude]` in `~/.cortex/config.toml`, or set the `CORTEX_CURSOR_SKILLS_ENABLED` or `CORTEX_CLAUDE_SKILLS_ENABLED` environment variable to `false`. See [Configuration](05-configuration.md#harness-compatibility) for details. Cortex always filters out known vendor-shipped default skills (such as Cursor's `shell`, `canvas`, and `statusline`), regardless of these settings.
+Cortex does not scan the Claude and Cursor skill directories by default. To scan a vendor, set its `skills` cell to `true` under `[compat.cursor]` or `[compat.claude]` in `~/.cortex/config.toml`, or set the `CORTEX_CURSOR_SKILLS_ENABLED` or `CORTEX_CLAUDE_SKILLS_ENABLED` environment variable to `true`. See [Configuration](05-configuration.md#harness-compatibility) for details. Cortex always filters out known vendor-shipped default skills (such as Cursor's `shell`, `canvas`, and `statusline`), regardless of these settings.
 
 ### Additional Skill Directories
 

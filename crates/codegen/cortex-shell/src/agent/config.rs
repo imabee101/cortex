@@ -977,7 +977,7 @@ pub struct Config {
     pub managed_mcps_enabled: bool,
     #[serde(skip)]
     pub managed_mcp_gateway_tools_enabled: bool,
-    /// Resolved vendor-compat config (env > `[compat]` TOML > feature flag > default ON).
+    /// Resolved vendor-compat config (env > `[compat]` TOML > feature flag > default OFF).
     /// Built from `compat` and `remote_settings` in `resolve_runtime_fields`.
     /// Threaded into skills / rules / AGENTS.md discovery.
     #[serde(skip)]

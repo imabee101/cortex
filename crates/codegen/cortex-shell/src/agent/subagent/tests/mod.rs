@@ -2067,6 +2067,7 @@ fn validate_subagent_type_accepts_plugin_types_and_lists_them_when_unknown() {
                 config_paths: Vec::new(),
                 disabled: Vec::new(),
                 enabled: Vec::new(),
+                claude: false,
             },
             &[plugin_dir],
             false,

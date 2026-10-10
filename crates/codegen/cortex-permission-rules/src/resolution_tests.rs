@@ -579,7 +579,7 @@ fn load_settings_no_env_field() {
 #[test]
 fn load_claude_env_merges_with_precedence() {
     // Isolate CORTEX_HOME (claude-import marker) and HOME (global `~/.claude`); an imported dev machine would otherwise early-return an empty map
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -605,6 +605,41 @@ fn load_claude_env_merges_with_precedence() {
 }
 
 #[test]
+fn claude_settings_env_and_rules_apply_only_when_opted_in() {
+    let home = isolated_home();
+    let claude_dir = home.path().join(".claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        r#"{"env": {"FROM_CLAUDE": "1"}, "permissions": {"allow": ["Bash(git status)"], "defaultMode": "bypassPermissions"}}"#,
+    )
+    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    assert!(load_claude_env_with_project(project.path(), true).is_empty());
+    let resolved = block_on(resolve_permissions_with_provenance_inner(
+        project.path(),
+        inputs(None),
+    ));
+    assert!(
+        resolved.is_none(),
+        "no rule or defaultMode may come from ~/.claude without the opt-in"
+    );
+
+    let _opt_in = EnvVarGuard::set("CORTEX_CLAUDE_SETTINGS_ENABLED", std::path::Path::new("1"));
+    assert_eq!(
+        load_claude_env_with_project(project.path(), true).get("FROM_CLAUDE"),
+        Some(&"1".to_string())
+    );
+    let resolved = block_on(resolve_permissions_with_provenance_inner(
+        project.path(),
+        inputs(None),
+    ))
+    .expect("opted-in Claude settings resolve");
+    assert!(resolved.config.default_mode_configured);
+}
+
+#[test]
 fn load_claude_env_empty_when_no_settings() {
     // Isolate CORTEX_HOME (claude-import marker) and HOME (global `~/.claude`)
     // Neither a dev machine's import marker nor its real `~/.claude` env can then trip the empty-map assertion
@@ -618,7 +653,7 @@ fn load_claude_env_empty_when_no_settings() {
 fn load_claude_env_with_project_drops_repo_env_when_untrusted() {
     // Repo-tree `.claude` env is injected into every subprocess, so an untrusted folder must drop it
     // Isolate `CORTEX_HOME` and `HOME` so the import marker is clean and the unique key stays independent of the host `~/.claude`
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -1454,6 +1489,7 @@ fn inputs_with_managed<'a>(
 #[must_use]
 pub(crate) struct IsolatedHome {
     _env: [EnvVarGuard; 4],
+    _claude_settings: Option<EnvVarGuard>,
     home: tempfile::TempDir,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
@@ -1475,9 +1511,20 @@ pub(crate) fn isolated_home() -> IsolatedHome {
     ];
     IsolatedHome {
         _env: env,
+        _claude_settings: None,
         home,
         _lock: lock,
     }
+}
+
+/// [`isolated_home`] with `[compat.claude] settings` turned on, for tests whose subject is the Claude settings files.
+pub(crate) fn isolated_home_with_claude_settings() -> IsolatedHome {
+    let mut home = isolated_home();
+    home._claude_settings = Some(EnvVarGuard::set(
+        "CORTEX_CLAUDE_SETTINGS_ENABLED",
+        std::path::Path::new("1"),
+    ));
+    home
 }
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -2033,7 +2080,7 @@ fn claude_catchall_allow_dropped_under_pin() {
     use crate::policy::CompiledPolicy;
     use crate::types::{AccessKind, Decision};
 
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2095,7 +2142,7 @@ fn claude_double_star_allow_dropped_under_pin() {
     use crate::policy::CompiledPolicy;
     use crate::types::{AccessKind, Decision};
 
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2146,7 +2193,7 @@ fn claude_double_star_allow_dropped_under_pin() {
 /// On a pinned host the `None` leg proves disk state is ignored; on an unpinned host the `Some` leg proves the parameter alone drops the rule.
 #[test]
 fn fallback_pinned_lock_param_controls_catchall_drop() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2182,7 +2229,7 @@ fn fallback_pinned_lock_param_controls_catchall_drop() {
 
 #[test]
 fn dont_ask_sets_prompt_policy_through_public_api() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2200,7 +2247,7 @@ fn dont_ask_sets_prompt_policy_through_public_api() {
 /// Regression: root-only reads silently ignored real user settings.
 #[test]
 fn dont_ask_nested_under_permissions_sets_prompt_policy() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2225,7 +2272,7 @@ fn dont_ask_nested_under_permissions_sets_prompt_policy() {
 
 #[test]
 fn auto_nested_under_permissions_sets_prompt_policy() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2376,7 +2423,7 @@ fn unrecognized_project_mode_claims_scope_over_global_accept_edits() {
 
 #[test]
 fn managed_default_mode_dont_ask_outranks_user_accept_edits() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2496,7 +2543,7 @@ fn managed_bypass_under_pin_records_skip_without_catchall() {
 
 #[test]
 fn nested_dont_ask_with_allow_rules_preserves_allow_and_deny_policy() {
-    let _home = isolated_home();
+    let _home = isolated_home_with_claude_settings();
     let tmp = tempfile::tempdir().unwrap();
     let claude_dir = tmp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2970,6 +3017,8 @@ fn explicit_default_mode_blocks_permission_mode_hint() {
         let _home = EnvVarGuard::set("HOME", tmp.path());
         let _cortex_home = EnvVarGuard::set("CORTEX_HOME", &tmp.path().join(".cortex"));
         let _marker = EnvVarGuard::unset("_CORTEX_CLAUDE_MARKER_OVERRIDE");
+        let _claude_settings =
+            EnvVarGuard::set("CORTEX_CLAUDE_SETTINGS_ENABLED", std::path::Path::new("1"));
 
         let resolved = rt
             .block_on(resolve_permissions_with_provenance_inner(

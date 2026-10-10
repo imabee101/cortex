@@ -197,7 +197,7 @@ Notes on scoping:
 
 - Cortex discovers a `.cortex/config.toml` at every directory level from the repository root down to your working directory, so a subdirectory can add rules on top of the repo root's.
 - Rules from all scopes are merged into one rule set; `deny` > `ask` > `allow` applies across scopes, so a global `deny` cannot be overridden by a project `allow`.
-- Cortex has no native `config.local.toml`. For personal, uncommitted rules in a project, use `.claude/settings.local.json`; Cortex reads it directly (see [Claude Code Compatibility](#3-claude-code-compatibility-claudesettingsjson)).
+- Cortex has no native `config.local.toml`. For personal, uncommitted rules in a project, use `.claude/settings.local.json` with `[compat.claude] settings = true` (see [Claude Code Compatibility](#3-claude-code-compatibility-claudesettingsjson)).
 - Interactive "Always allow" decisions are stored outside the repository, scoped to the project (see [Interactive Approvals](#interactive-approvals-and-where-they-persist)).
 
 To stop prompts for a specific command in one project, add a narrow allow rule to that project's `.cortex/config.toml` (or `.claude/settings.json`):
@@ -276,7 +276,7 @@ allow = [
 
 ### 3. Claude Code Compatibility (`.claude/settings.json`)
 
-Cortex reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root). The native `.cortex` source for permission rules is `config.toml`, described in the section above.
+With `[compat.claude] settings = true` (off by default), Cortex reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root), for permission rules, `defaultMode`, and `env`. The native `.cortex` source for permission rules is `config.toml`, described in the section above.
 
 Example:
 

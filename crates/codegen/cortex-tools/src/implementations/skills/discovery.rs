@@ -1552,7 +1552,7 @@ model: test-model
             &repo,
             Some(repo.as_path()),
             &mut checked,
-            CompatConfig::default(),
+            CompatConfig::all_enabled(),
         );
         let names_on: Vec<&str> = on.iter().map(|s| s.name.as_str()).collect();
         assert!(
@@ -1565,7 +1565,7 @@ model: test-model
         );
 
         // claude.skills OFF → only cortex-dyn discovered.
-        let mut compat_off = CompatConfig::default();
+        let mut compat_off = CompatConfig::all_enabled();
         compat_off.claude.skills = false;
         let mut checked2 = HashSet::new();
         let off = discover_skills_for_paths(

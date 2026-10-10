@@ -115,12 +115,16 @@ User-level configuration lives in `$CORTEX_HOME/config.toml` (default `~/.cortex
 
 ### `compat`
 
+Every `compat` cell defaults to `false`.
+
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
 | `compat.claude.agents` | `boolean` | `yes` | `user` | Scan CLAUDE.md. Also CORTEX_CLAUDE_AGENTS_ENABLED. |
 | `compat.claude.hooks` | `boolean` | `yes` | `user` | Scan Claude hooks. Also CORTEX_CLAUDE_HOOKS_ENABLED. |
 | `compat.claude.mcps` | `boolean` | `yes` | `user` | Scan Claude MCP config. Also CORTEX_CLAUDE_MCPS_ENABLED. |
+| `compat.claude.plugins` | `boolean` | `yes` | `user` | Load Claude plugins, marketplaces, and installs. Also CORTEX_CLAUDE_PLUGINS_ENABLED. |
 | `compat.claude.rules` | `boolean` | `yes` | `user` | Scan Claude rules. Also CORTEX_CLAUDE_RULES_ENABLED. |
+| `compat.claude.settings` | `boolean` | `yes` | `user` | Apply permission rules and env from Claude settings.json. Also CORTEX_CLAUDE_SETTINGS_ENABLED. |
 | `compat.claude.skills` | `boolean` | `yes` | `user` | Scan Claude skills. Also CORTEX_CLAUDE_SKILLS_ENABLED. |
 | `compat.codex.hooks` | `boolean` | `yes` | `user` | Scan Codex hooks when present. |
 | `compat.codex.skills` | `boolean` | `yes` | `user` | Scan Codex skills directories when present. |
