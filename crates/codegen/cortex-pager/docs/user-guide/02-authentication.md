@@ -43,7 +43,7 @@ To sign out, run `cortex logout`. It takes no flags and clears your cached crede
 
 ## API Key
 
-For CI/CD, automation, or environments without browser access, use an API key from [llm.imabee.com](https://llm.imabee.com):
+For CI/CD, automation, or environments without browser access, use an API key. Create one at [llm.imabee.com/account/api-keys](https://llm.imabee.com/account/api-keys): sign in, name the key, and copy it. The key is shown once; only a hash is stored. The same page lists your keys with when each was last used and revokes them, effective on the next request.
 
 ```bash
 export CORTEX_API_KEY="cortex-..."

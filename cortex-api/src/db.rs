@@ -216,8 +216,23 @@ CREATE TABLE IF NOT EXISTS upstream_buckets (
 );
 "#;
 
+/// API keys are stored as a SHA-256 of the full key; the plaintext is shown once, at creation.
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS api_keys (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_suffix TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS api_keys_user ON api_keys (user_id, created_at);
+"#;
+
 /// Applied in order, once each, under one advisory lock so instances can start together.
-const MIGRATIONS: &[(i32, &str)] = &[(1, SCHEMA), (2, SCHEMA_V2)];
+const MIGRATIONS: &[(i32, &str)] = &[(1, SCHEMA), (2, SCHEMA_V2), (3, SCHEMA_V3)];
 const MIGRATION_LOCK: i64 = 0x636f_7274_6578;
 
 #[derive(Debug, Error)]
@@ -285,6 +300,23 @@ pub struct DeviceGrant {
     pub interval_secs: i32,
     pub poll_after: Option<DateTime<Utc>>,
     pub consumed_at: Option<DateTime<Utc>>,
+}
+
+/// A key as its owner sees it in the console; the secret itself is never stored.
+#[derive(Debug, Clone)]
+pub struct ApiKey {
+    pub id: Uuid,
+    pub name: String,
+    pub key_suffix: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+/// The account and key a request authenticated with.
+#[derive(Debug, Clone)]
+pub struct ApiKeyPrincipal {
+    pub user_id: Uuid,
+    pub key: ApiKey,
 }
 
 pub struct Rate {
@@ -757,6 +789,128 @@ impl Db {
             .await
             .map_err(|_| DbError::Query)?;
         Ok(())
+    }
+
+    /// Stores a new key unless the user already holds `limit` live keys; `false` means the limit was hit.
+    pub async fn insert_api_key(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        name: &str,
+        key_hash: &str,
+        key_suffix: &str,
+        limit: i64,
+    ) -> Result<bool, DbError> {
+        let mut client = self.pool.get().await.map_err(|_| DbError::Connect)?;
+        let tx = client.transaction().await.map_err(|_| DbError::Query)?;
+        // Serialises concurrent creations for one user so the limit holds.
+        tx.execute("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", &[&user_id])
+            .await
+            .map_err(|_| DbError::Query)?;
+        let live: i64 = tx
+            .query_one(
+                "SELECT count(*) FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL",
+                &[&user_id],
+            )
+            .await
+            .map_err(|_| DbError::Query)?
+            .get(0);
+        if live >= limit {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO api_keys (id, user_id, name, key_hash, key_suffix) VALUES ($1, $2, $3, $4, $5)",
+            &[&id, &user_id, &name, &key_hash, &key_suffix],
+        )
+        .await
+        .map_err(|_| DbError::Query)?;
+        tx.commit().await.map_err(|_| DbError::Query)?;
+        Ok(true)
+    }
+
+    /// The user's live keys, newest first.
+    pub async fn api_keys_for(&self, user_id: Uuid) -> Result<Vec<ApiKey>, DbError> {
+        let client = self.pool.get().await.map_err(|_| DbError::Connect)?;
+        let rows = client
+            .query(
+                "SELECT id, name, key_suffix, created_at, last_used_at FROM api_keys
+                 WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+                &[&user_id],
+            )
+            .await
+            .map_err(|_| DbError::Query)?;
+        Ok(rows
+            .iter()
+            .map(|row| ApiKey {
+                id: row.get(0),
+                name: row.get(1),
+                key_suffix: row.get(2),
+                created_at: row.get(3),
+                last_used_at: row.get(4),
+            })
+            .collect())
+    }
+
+    /// Revokes one of the user's own keys; `false` when no such live key belongs to them.
+    pub async fn revoke_api_key(&self, user_id: Uuid, id: Uuid) -> Result<bool, DbError> {
+        let client = self.pool.get().await.map_err(|_| DbError::Connect)?;
+        let changed = client
+            .execute(
+                "UPDATE api_keys SET revoked_at = now()
+                 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+                &[&id, &user_id],
+            )
+            .await
+            .map_err(|_| DbError::Query)?;
+        Ok(changed == 1)
+    }
+
+    /// Resolves a live key by its hash. The last-used time is written at most once a minute,
+    /// so a busy key does not turn every request into a row update.
+    pub async fn api_key_principal(
+        &self,
+        key_hash: &str,
+    ) -> Result<Option<ApiKeyPrincipal>, DbError> {
+        let client = self.pool.get().await.map_err(|_| DbError::Connect)?;
+        let Some(row) = client
+            .query_opt(
+                "SELECT user_id, id, name, key_suffix, created_at, last_used_at,
+                        last_used_at IS NULL OR last_used_at < now() - interval '1 minute'
+                 FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+                &[&key_hash],
+            )
+            .await
+            .map_err(|_| DbError::Query)?
+        else {
+            return Ok(None);
+        };
+        let mut key = ApiKey {
+            id: row.get(1),
+            name: row.get(2),
+            key_suffix: row.get(3),
+            created_at: row.get(4),
+            last_used_at: row.get(5),
+        };
+        let stale: bool = row.get(6);
+        if stale {
+            let touched = client
+                .query_opt(
+                    "UPDATE api_keys SET last_used_at = now()
+                     WHERE id = $1 AND revoked_at IS NULL RETURNING last_used_at",
+                    &[&key.id],
+                )
+                .await
+                .map_err(|_| DbError::Query)?;
+            match touched {
+                Some(touched) => key.last_used_at = touched.get(0),
+                // Revoked between the two statements.
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(ApiKeyPrincipal {
+            user_id: row.get(0),
+            key,
+        }))
     }
 
     pub async fn session_user(&self, id: &str) -> Result<Option<Uuid>, DbError> {

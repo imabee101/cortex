@@ -41,7 +41,7 @@ Limits in `cortex-api.service` override the code defaults: queue 256 deep and 54
 
 `/v1/models` reports `CORTEX_API_CONTEXT_PERCENT` (40) of the real window on purpose: the harness counts a conversation as bytes/4 and never reads the server's token count, which runs about twice that on code, so compaction at 85% of the real window comes after llama-server has already refused the request. Raise it only after measuring the ratio on real sessions.
 
-Knobs (environment, defaults in `cortex-api/src/main.rs`): `CORTEX_API_EMBED`, `_EMBED_MODEL`, `_EMBED_DIMENSIONS` (memory embeddings are advertised in settings only when the first two are set), `_DIST_DIR`, `CORTEX_API_PARALLEL` (0 reads slots from llama), `_QUEUE_MAX` 8, `_QUEUE_WAIT_SECS` 30, `_IP_RATE_PER_MIN`, `_USER_RATE_PER_MIN`, `_INFERENCE_PER_MIN`, `_DAILY_INFERENCE_QUOTA`, `_DAILY_SEARCH_QUOTA`, `_TELEMETRY_RETENTION_DAYS`.
+Knobs (environment, defaults in `cortex-api/src/main.rs`): `CORTEX_API_EMBED`, `_EMBED_MODEL`, `_EMBED_DIMENSIONS` (memory embeddings are advertised in settings only when the first two are set), `_DIST_DIR`, `CORTEX_API_PARALLEL` (0 reads slots from llama), `_QUEUE_MAX` 8, `_QUEUE_WAIT_SECS` 30, `_IP_RATE_PER_MIN`, `_USER_RATE_PER_MIN`, `_KEY_LIMIT` 25 (live API keys per account), `_INFERENCE_PER_MIN`, `_DAILY_INFERENCE_QUOTA`, `_DAILY_SEARCH_QUOTA`, `_TELEMETRY_RETENTION_DAYS`.
 
 ## Check
 
