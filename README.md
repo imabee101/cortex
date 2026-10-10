@@ -62,7 +62,7 @@ flowchart LR
 - Every merge that changes Rust ships with no manual step: the same verified bytes go to the feed `cortex update` reads, the previous client must update itself to them or the host rolls back, and only then does CI tag `vX.Y.Z` and mark the release latest.
 - Assets carry `SHA256SUMS` and a build-provenance attestation: `gh attestation verify <file> --repo imabee101/cortex`.
 
-Operations (deploy host, limits, backups, rollback) are in [`RUNBOOK.md`](RUNBOOK.md).
+Operations (deploy host, limits, backups, rollback) are in [`RUNBOOK.md`](RUNBOOK.md). How harness and model changes are measured (Terminal-Bench 2.0) is in [`EVALUATION.md`](EVALUATION.md).
 
 ## Build from source
 
