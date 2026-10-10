@@ -14,4 +14,5 @@ Decided 2026-10-10. This file records how Cortex measures changes to what the ha
 - **One inference slot.** The local `llama-server` serves one request at a time, so trials run sequentially (concurrency 1).
 - **Repeat trials.** The model runs without a seed, so each comparison repeats every task enough times to separate a change from noise; one passing run proves nothing.
 - **A change stays only if it wins.** If after does not beat before, the change is not merged and the measured result is reported.
+- **Server levers first.** The per-model levers the harness was built with are listed in [`TUNING.md`](TUNING.md); try them before any client change.
 - **Wording before mechanism.** Fix a defect in the instructions first. Mechanical harness changes (trimming tools, per-turn reminders, new runtime steps) come only after wording has been measured and failed.
