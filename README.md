@@ -42,8 +42,9 @@ flowchart LR
 - **`cortex-api`** (Rust, [`cortex-api/`](cortex-api)) is the server the client was built for: OIDC login,
   models and settings, `chat_completions` / `responses` / `messages` streaming, memory embeddings,
   server-side web search, session sync, and the update feed.
-- **The client is a rename and nothing more.** All translation lives in the server, so the harness
-  runs unmodified.
+- **The client is a rename.** All translation lives in the server. The one other change allowed is
+  compensating for a weakness of the deployed model the way the upstream authors would have, kept
+  only with a measured Terminal-Bench win ([`EVALUATION.md`](EVALUATION.md#changing-the-harness)).
 
 ## Releases
 
