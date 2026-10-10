@@ -6,7 +6,8 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const DB: &str = "postgres://127.0.0.1/cortex_api_test";
+// A database of its own: test binaries run in parallel, and the server creates it on start.
+const DB_NAME: &str = "cortex_api_keys_test";
 
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -23,7 +24,7 @@ fn psql(sql: &str) -> String {
             "-h",
             "127.0.0.1",
             "-d",
-            "cortex_api_test",
+            DB_NAME,
             "-At",
             "-v",
             "ON_ERROR_STOP=1",
@@ -134,10 +135,14 @@ async fn probe(base: &str, bearer: Option<&str>, session_marker: bool) -> reqwes
 
 #[tokio::test]
 async fn api_keys_are_created_used_and_revoked_through_the_console() {
-    psql("TRUNCATE users, browser_sessions, login_attempts, rate_buckets CASCADE");
-    let mut config = cortex_api::Config::new("127.0.0.1:0".parse().expect("addr"), DB.to_owned());
+    let mut config = cortex_api::Config::new(
+        "127.0.0.1:0".parse().expect("addr"),
+        format!("postgres://127.0.0.1/{DB_NAME}"),
+    );
     config.api_key_limit = 2;
     let server = cortex_api::serve(config).await.expect("serve");
+    // After serve, so the migrations have created every table.
+    psql("TRUNCATE users, browser_sessions, login_attempts, rate_buckets CASCADE");
     let base = format!("http://{}", server.addr);
 
     // Signed out, the console asks for a sign-in that returns to it.
