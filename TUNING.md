@@ -1,6 +1,6 @@
 # Tuning a model
 
-How to compensate for a model's weaknesses the way the harness was built to: from the server, per model, with no client change. The client stays a pure rename (see the project rules), so this is the first place to look. Measure every change per [`EVALUATION.md`](EVALUATION.md).
+How to compensate for a model's weaknesses the way the harness was built to: from the server, per model, with no client change. This is the first place to look. Measure every change per [`EVALUATION.md`](EVALUATION.md).
 
 ## Where the levers live
 
@@ -27,6 +27,6 @@ How to compensate for a model's weaknesses the way the harness was built to: fro
 - `GET /v1/subagents/bundle` (`cortex-api/src/control.rs`, type `SubagentBundle` in `prod/mc/cli-chat-proxy-types`) delivers agent definitions; it is empty today.
 - `supports_backend_search` turns on server-side web search through Brave. It is the built-in way to supply knowledge a small model lacks, and is on only when the Brave token is configured.
 
-## Last resort
+## Client changes
 
-The system prompt template (`crates/codegen/cortex-agent/templates/prompt.md`, regenerated with `crates/codegen/cortex-agent/scripts/encrypt_templates.py`) and the tool descriptions are client code. Editing them breaks the rename-only rule, so it needs an explicit decision from the owner and a measured win.
+When no lever here can fix a measured failure, the system prompt template (`crates/codegen/cortex-agent/templates/prompt.md`, regenerated with `crates/codegen/cortex-agent/scripts/encrypt_templates.py`), the tool descriptions, or the runtime may change, but only under the bar in [`EVALUATION.md`](EVALUATION.md#changing-the-harness).
