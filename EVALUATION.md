@@ -4,7 +4,7 @@ Decided 2026-10-10. This file records how Cortex measures changes to what the ha
 
 ## Benchmark
 
-- **Terminal-Bench 2.0 is the benchmark for every harness and model change.** It is run through [Harbor](https://www.tbench.ai/docs/run-terminal-bench-2-0), the official runner, with Cortex plugged in as a custom agent (`--agent-import-path`).
+- **Terminal-Bench 2.0 is the benchmark for every harness and model change.** The agent under test is the Cortex harness itself: the `cortex` binary, with its own system prompt, tools, and compaction, driving the model through `cortex-api`. [Harbor](https://www.tbench.ai/docs/run-terminal-bench-2-0), the official runner, only provisions each task's container and grades it, with Cortex plugged in as a custom agent (`--agent-import-path`).
 - The earlier hand-written cases (`L1`–`L13`, `R1`–`R4`) are retired once their last run finishes. Their results stay as history and are not extended.
 
 ## Rules for a measured run
