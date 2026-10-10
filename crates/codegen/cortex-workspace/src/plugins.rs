@@ -72,7 +72,8 @@ pub struct PluginConfigInputs<'a> {
 }
 
 /// A project's `[plugins].paths` merge only when `trust` allows project sources; its `disabled` list always merges.
-/// Claude plugin lists come only from `<home>/.claude/settings.json`, and not after a Claude import.
+/// Claude plugins load only when the user turned on `[compat.claude] plugins`. Their lists then come only from
+/// `<home>/.claude/settings.json`, and not after a Claude import.
 pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> DiscoveryConfig {
     let PluginConfigInputs {
         effective_config,
@@ -98,9 +99,15 @@ pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> Disco
         }
     }
 
+    let claude = cortex_config::compat::resolve_compat_claude_plugins(
+        effective_config,
+        &cortex_config::compat::CompatEnv::from_process(),
+        None,
+    );
     // A repo's own `.claude/settings.json` is never read:
     // it could enable its plugins' hooks before the repo is trusted.
-    if claude_import == ClaudeImport::NotImported
+    if claude
+        && claude_import == ClaudeImport::NotImported
         && let Some(home) = home
     {
         let (claude_enabled, claude_disabled) =
@@ -115,6 +122,7 @@ pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> Disco
         config_paths: plugins.paths.iter().map(PathBuf::from).collect(),
         disabled: plugins.disabled,
         enabled: plugins.enabled,
+        claude,
     }
 }
 

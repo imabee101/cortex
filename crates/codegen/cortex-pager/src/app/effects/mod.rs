@@ -62,7 +62,7 @@ const SESSION_LIST_LIMIT: u64 = 30;
 const DASHBOARD_SESSION_LIST_LIMIT: u64 = 100;
 /// MCP discovery reads and parses several config sources (global and project, from `cwd` up to the repository root),
 /// so it runs on the blocking pool rather than the UI thread or a tokio worker.
-/// Session-open paths have no resolved per-vendor compat in scope; the default (all-on) preserves existing behavior.
+/// Session-open paths have no resolved per-vendor compat in scope, so the vendor defaults apply.
 pub(crate) async fn discover_mcp_servers(
     cwd: std::path::PathBuf,
 ) -> Vec<acp::McpServer> {

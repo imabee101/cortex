@@ -19,7 +19,7 @@ fn inputs<'a>(cwd: &'a Path, effective_config: Option<&'a toml::Value>) -> Plugi
 }
 
 #[test]
-fn skips_claude_settings_plugins_only_after_claude_import() {
+fn reads_claude_settings_plugins_only_when_opted_in_and_not_imported() {
     let home = tempfile::tempdir().expect("create temp home");
     let cwd = tempfile::tempdir().expect("create temp cwd");
 
@@ -31,19 +31,27 @@ fn skips_claude_settings_plugins_only_after_claude_import() {
     )
     .expect("write .claude/settings.json");
 
-    for (claude_import, expected) in [
-        (ClaudeImport::Imported, false),
-        (ClaudeImport::NotImported, true),
+    let opted_in: toml::Value =
+        toml::from_str("[compat.claude]\nplugins = true\n").expect("parse config");
+    for (effective_config, claude_import, expected) in [
+        (None, ClaudeImport::NotImported, false),
+        (Some(&opted_in), ClaudeImport::Imported, false),
+        (Some(&opted_in), ClaudeImport::NotImported, true),
     ] {
         let config = resolve_effective_plugins_config(PluginConfigInputs {
             home: Some(home.path()),
             claude_import,
-            ..inputs(cwd.path(), None)
+            ..inputs(cwd.path(), effective_config)
         });
+        let label = format!(
+            "opted in: {}, {claude_import:?}",
+            effective_config.is_some()
+        );
+        assert_eq!(effective_config.is_some(), config.claude, "{label}");
         assert_eq!(
             expected,
             config.enabled.iter().any(|name| name == "cutoff-probe"),
-            "{claude_import:?}"
+            "{label}"
         );
     }
 }

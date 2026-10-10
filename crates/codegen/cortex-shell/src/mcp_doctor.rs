@@ -115,11 +115,11 @@ fn toml_declaring_paths(
 fn discover_servers(cwd: &Path) -> (Vec<ConfigSourceStatus>, Vec<DiscoveredServer>) {
     let plugin_registry = crate::util::config::load_cli_plugin_registry(cwd);
 
-    // mcp-doctor is a diagnostic tool; use default (all-on) compat to show everything.
+    // mcp-doctor is a diagnostic tool; every vendor is on so it shows everything.
     let sourced = crate::session::managed_mcp::merge_managed_mcp_servers_sourced(
         cwd,
         Some(&plugin_registry),
-        &cortex_tools::types::compat::CompatConfig::default(),
+        &cortex_tools::types::compat::CompatConfig::all_enabled(),
     );
 
     let cortex_home = cortex_tools::util::cortex_home::cortex_home();
@@ -583,7 +583,7 @@ fn policy_subjects(
     for (server, origin) in crate::session::managed_mcp::merge_managed_mcp_servers_sourced(
         cwd,
         Some(&plugin_registry),
-        &cortex_tools::types::compat::CompatConfig::default(),
+        &cortex_tools::types::compat::CompatConfig::all_enabled(),
     ) {
         // The merge re-adds enabled TOML servers; the walk above already judged every TOML one.
         if matches!(origin, McpServerOrigin::ConfigToml { .. }) {

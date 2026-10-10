@@ -687,7 +687,7 @@ impl SkillsFileWatcher {
             monorepo_user_dir,
             &cortex_home,
             config_paths,
-            cortex_tools::types::compat::CompatConfig::default(),
+            cortex_tools::types::compat::CompatConfig::all_enabled(),
         );
         let project_root = cwd.map(crate::session::workflow::registry::project_root);
         let (mut watcher, rx) =

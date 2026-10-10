@@ -10,6 +10,9 @@
 //!    Installed plugins from `~/.claude/plugins/installed_plugins.json` (scope: `User`)
 //! 6. Paths from `[plugins].paths` in config (scope: `ConfigPath`)
 //!
+//! Claude sources (3, 5, Claude marketplaces, `installed_plugins.json`) are scanned only when
+//! [`DiscoveryConfig::claude`] is on, which the user chooses with `[compat.claude] plugins`.
+//!
 //! Deduplicates by canonical path and resolves name conflicts via the canonical source precedence.
 
 use std::collections::{HashMap, HashSet};
@@ -178,6 +181,9 @@ pub struct DiscoveryConfig {
     pub disabled: Vec<String>,
     /// `[plugins].enabled` plugin IDs or names (overrides default-disabled for project plugins).
     pub enabled: Vec<String>,
+    /// Claude's plugin sources: `.claude/plugins/` (project and user), its marketplaces, and
+    /// `installed_plugins.json`. Off unless the user turned on `[compat.claude] plugins`.
+    pub claude: bool,
 }
 
 impl DiscoveryConfig {
@@ -286,6 +292,9 @@ pub fn discover_plugins(
         let (project_dirs, git_root) = project_plugin_dirs(Some(cwd));
         for plugins_dir in project_dirs {
             let origin = project_plugins_dir_origin(&plugins_dir);
+            if origin == PluginOrigin::ProjectClaude && !config.claude {
+                continue;
+            }
             scan_plugin_dir(
                 &plugins_dir,
                 PluginScope::Project,
@@ -299,7 +308,9 @@ pub fn discover_plugins(
 
         // 3b. Marketplace plugins (extraKnownMarketplaces in .claude/settings.json).
         // Reuse the git root resolved above instead of walking the repo again
-        if let Some(ref root) = git_root {
+        if config.claude
+            && let Some(ref root) = git_root
+        {
             for marketplace in &super::marketplace::resolve(root) {
                 for dir in &marketplace.plugin_dirs {
                     collect_plugin(
@@ -323,6 +334,9 @@ pub fn discover_plugins(
     let cortex = cortex_config::user_cortex_home();
     let plugin_dirs = user_plugin_dirs(cortex_dirs::home_dir().as_deref(), cortex.as_deref());
     for (plugins_dir, origin) in plugin_dirs {
+        if origin == PluginOrigin::UserClaude && !config.claude {
+            continue;
+        }
         if plugins_dir.is_dir() {
             scan_plugin_dir(
                 &plugins_dir,
@@ -339,7 +353,12 @@ pub fn discover_plugins(
     // 5a. Known marketplaces (~/.claude/plugins/known_marketplaces.json).
     // Marketplace repos are cloned locally and registered here.
     // Each marketplace has a plugins/ (and optionally external_plugins/) subdirectory.
-    for marketplace in &super::marketplace::resolve_known_marketplaces() {
+    let known_marketplaces = if config.claude {
+        super::marketplace::resolve_known_marketplaces()
+    } else {
+        Vec::new()
+    };
+    for marketplace in &known_marketplaces {
         for dir in &marketplace.plugin_dirs {
             collect_plugin(
                 dir,
@@ -373,7 +392,9 @@ pub fn discover_plugins(
     // 5c. Installed plugins (~/.claude/plugins/installed_plugins.json).
     // Entries carry explicit installPath dirs (nested under cache/<marketplace>/<plugin>/<version>/)
     // The plugin name is extracted from the JSON key ("name@marketplace").
-    if let Some(home) = cortex_dirs::home_dir() {
+    if config.claude
+        && let Some(home) = cortex_dirs::home_dir()
+    {
         let installed_json = home
             .join(".claude")
             .join("plugins")
@@ -1582,7 +1603,10 @@ mod tests {
         .unwrap();
 
         let trust = TrustStore::load_from(tmp.path().join("trust"));
-        let config = DiscoveryConfig::default();
+        let config = DiscoveryConfig {
+            claude: true,
+            ..DiscoveryConfig::default()
+        };
         let discovered = discover_plugins(Some(tmp.path()), &config, &trust, true);
         let p = discovered
             .iter()
@@ -1590,6 +1614,14 @@ mod tests {
             .expect("project claude plugin discovered");
         assert_eq!(p.scope, PluginScope::Project);
         assert_eq!(p.origin, PluginOrigin::ProjectClaude);
+
+        // Without the user's opt-in the same trusted project contributes no Claude plugin.
+        let discovered =
+            discover_plugins(Some(tmp.path()), &DiscoveryConfig::default(), &trust, true);
+        assert!(
+            discovered.iter().all(|p| p.manifest.name != name),
+            "Claude plugins load only when [compat.claude] plugins is on"
+        );
     }
 
     #[test]

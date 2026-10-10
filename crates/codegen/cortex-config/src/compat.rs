@@ -1,14 +1,15 @@
 //! Vendor compatibility configuration for third-party agent surfaces
-//! (skills, rules, agents, MCPs, hooks, sessions).
+//! (skills, rules, agents, MCPs, hooks, sessions, settings, plugins).
 //!
 //! This module owns the canonical cell registry used by runtime resolution and diagnostics
-//! (env var → config TOML → remote setting → default ON).
+//! (env var → config TOML → remote setting → default OFF). Loading another harness's files is
+//! a choice the user makes, so nothing is read from a vendor directory until a cell is turned on.
 //!
 //! Two forms:
 //! - [`CompatConfigToml`] — as parsed from the `[compat]` TOML section. Each
 //!   cell is `Option<bool>` so `None` falls through to the resolution chain.
 //! - [`CompatConfig`] — resolved plain bools consumed at runtime. Every cell
-//!   defaults on.
+//!   defaults off; [`CompatConfig::all_enabled`] is the superset for trust gates and diagnostics.
 //!
 //! The session config, `cortex inspect`, the session picker, and any other process that loads
 //! vendor settings resolve through this module, one cell at a time.
@@ -33,6 +34,10 @@ pub enum CompatSurface {
     Mcps,
     Hooks,
     Sessions,
+    /// Permission rules and `env` from the vendor's settings files.
+    Settings,
+    /// Plugins installed or enabled through the vendor.
+    Plugins,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompatRemoteKey {
@@ -92,16 +97,20 @@ impl CompatCell {
 
     /// Whether Cortex currently implements this compatibility surface. Codex non-session cells remain
     /// reserved in the registry so their config shape is stable, but runtime discovery does not
-    /// consume them.
+    /// consume them. Settings and plugins are read from Claude only.
     pub const fn is_runtime_supported(self) -> bool {
         match self.vendor {
-            CompatVendor::Cursor | CompatVendor::Claude => true,
+            CompatVendor::Claude => true,
+            CompatVendor::Cursor => !matches!(
+                self.surface,
+                CompatSurface::Settings | CompatSurface::Plugins
+            ),
             CompatVendor::Codex => matches!(self.surface, CompatSurface::Sessions),
         }
     }
 }
 
-pub const COMPAT_CELLS: [CompatCell; 18] = [
+pub const COMPAT_CELLS: [CompatCell; 20] = [
     CompatCell::new(
         CompatVendor::Cursor,
         CompatSurface::Skills,
@@ -175,6 +184,18 @@ pub const COMPAT_CELLS: [CompatCell; 18] = [
         Some(CompatRemoteKey::ClaudeSessions),
     ),
     CompatCell::new(
+        CompatVendor::Claude,
+        CompatSurface::Settings,
+        "CORTEX_CLAUDE_SETTINGS_ENABLED",
+        None,
+    ),
+    CompatCell::new(
+        CompatVendor::Claude,
+        CompatSurface::Plugins,
+        "CORTEX_CLAUDE_PLUGINS_ENABLED",
+        None,
+    ),
+    CompatCell::new(
         CompatVendor::Codex,
         CompatSurface::Skills,
         "CORTEX_CODEX_SKILLS_ENABLED",
@@ -214,7 +235,7 @@ pub const COMPAT_CELLS: [CompatCell; 18] = [
 
 /// Per-vendor compat cells as parsed from `[compat.<vendor>]` TOML.
 ///
-/// Resolution order is env override, this value, remote flag, default ON.
+/// Resolution order is env override, this value, remote flag, default OFF.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct VendorCompatToml {
     pub skills: Option<bool>,
@@ -223,6 +244,8 @@ pub struct VendorCompatToml {
     pub mcps: Option<bool>,
     pub hooks: Option<bool>,
     pub sessions: Option<bool>,
+    pub settings: Option<bool>,
+    pub plugins: Option<bool>,
 }
 
 impl VendorCompatToml {
@@ -234,6 +257,8 @@ impl VendorCompatToml {
             CompatSurface::Mcps => self.mcps,
             CompatSurface::Hooks => self.hooks,
             CompatSurface::Sessions => self.sessions,
+            CompatSurface::Settings => self.settings,
+            CompatSurface::Plugins => self.plugins,
         }
     }
 }
@@ -259,8 +284,9 @@ impl CompatConfigToml {
     }
 }
 
-/// Resolved per-vendor compat cells. Plain bools — the runtime source of truth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Resolved per-vendor compat cells. Plain bools — the runtime source of truth. Every cell
+/// defaults off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VendorCompat {
     pub skills: bool,
     pub rules: bool,
@@ -268,6 +294,8 @@ pub struct VendorCompat {
     pub mcps: bool,
     pub hooks: bool,
     pub sessions: bool,
+    pub settings: bool,
+    pub plugins: bool,
 }
 
 impl VendorCompat {
@@ -279,6 +307,8 @@ impl VendorCompat {
             CompatSurface::Mcps => self.mcps,
             CompatSurface::Hooks => self.hooks,
             CompatSurface::Sessions => self.sessions,
+            CompatSurface::Settings => self.settings,
+            CompatSurface::Plugins => self.plugins,
         }
     }
 
@@ -290,21 +320,23 @@ impl VendorCompat {
             CompatSurface::Mcps => self.mcps = value,
             CompatSurface::Hooks => self.hooks = value,
             CompatSurface::Sessions => self.sessions = value,
+            CompatSurface::Settings => self.settings = value,
+            CompatSurface::Plugins => self.plugins = value,
         }
     }
 }
 
-impl Default for VendorCompat {
-    fn default() -> Self {
-        Self {
-            skills: true,
-            rules: true,
-            agents: true,
-            mcps: true,
-            hooks: true,
-            sessions: true,
-        }
-    }
+impl VendorCompat {
+    const ALL_ENABLED: VendorCompat = VendorCompat {
+        skills: true,
+        rules: true,
+        agents: true,
+        mcps: true,
+        hooks: true,
+        sessions: true,
+        settings: true,
+        plugins: true,
+    };
 }
 
 /// Bare file names, no path separators: read_file matches them against `Path::file_name()`; `agent_filenames()` prepends them to the vendor-gated `.claude/` paths.
@@ -359,7 +391,7 @@ impl CompatEnv {
     }
 }
 
-/// Resolved `[compat]` configuration threaded into compatibility consumers. Every cell defaults on.
+/// Resolved `[compat]` configuration threaded into compatibility consumers. Every cell defaults off.
 /// Codex's non-session cells are reserved and are not consumed by discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CompatConfig {
@@ -369,6 +401,17 @@ pub struct CompatConfig {
 }
 
 impl CompatConfig {
+    /// Every vendor cell on: the superset of vendor locations. For trust gates that must see a
+    /// vendor directory whatever the user's choice, and for diagnostics that list what exists.
+    /// Never the input to what a session loads.
+    pub const fn all_enabled() -> CompatConfig {
+        CompatConfig {
+            cursor: VendorCompat::ALL_ENABLED,
+            claude: VendorCompat::ALL_ENABLED,
+            codex: VendorCompat::ALL_ENABLED,
+        }
+    }
+
     pub fn value(&self, cell: CompatCell) -> bool {
         match cell.vendor() {
             CompatVendor::Cursor => self.cursor.value(cell.surface()),
@@ -604,6 +647,36 @@ pub fn resolve_compat_sessions(
         UnreadableCellPolicy::Disable,
     );
     resolve_compat_cells(configured, env, remote).sessions()
+}
+
+/// Claude's settings cell for a reader with no session config; an unreadable value turns it off.
+pub fn resolve_compat_claude_settings(
+    effective_config: Option<&toml::Value>,
+    env: &CompatEnv,
+    remote: Option<&RemoteSettings>,
+) -> bool {
+    let configured = configured_surface(
+        effective_config,
+        CompatSurface::Settings,
+        UnreadableCellPolicy::Disable,
+    );
+    resolve_compat_cells(configured, env, remote)
+        .claude
+        .settings
+}
+
+/// Claude's plugins cell for a reader with no session config; an unreadable value turns it off.
+pub fn resolve_compat_claude_plugins(
+    effective_config: Option<&toml::Value>,
+    env: &CompatEnv,
+    remote: Option<&RemoteSettings>,
+) -> bool {
+    let configured = configured_surface(
+        effective_config,
+        CompatSurface::Plugins,
+        UnreadableCellPolicy::Disable,
+    );
+    resolve_compat_cells(configured, env, remote).claude.plugins
 }
 
 /// The hook cells for a loader with no session config; an unreadable one is treated as unset.

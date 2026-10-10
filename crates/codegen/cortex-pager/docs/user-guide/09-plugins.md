@@ -57,7 +57,7 @@ Add sources under `extraKnownMarketplaces`, keyed by name. Each entry's `source`
 }
 ```
 
-Place this file at `~/.cortex/settings.json` or `~/.claude/settings.json`.
+Place this file at `~/.cortex/settings.json`, or at `~/.claude/settings.json` with `[compat.claude] plugins = true`.
 
 ---
 
@@ -414,7 +414,7 @@ A skill or command may ship a **helper script** next to its SKILL.md (for exampl
 
 ### Where Cortex looks for plugins
 
-Cortex discovers plugins from these locations, in priority order. The `.claude/plugins/` equivalents also work, and when two plugins share a name the higher-priority one wins:
+Cortex discovers plugins from these locations, in priority order. With `[compat.claude] plugins = true`, the `.claude/plugins/` equivalents also work. When two plugins share a name the higher-priority one wins:
 
 | Location | Scope | Trust |
 |----------|-------|-------|
