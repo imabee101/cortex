@@ -212,16 +212,15 @@ async fn phase4_inventory_routes() {
             .status(),
         401
     );
-    let key: Value = http
+    // The probe describes the API key a request was made with; a session token has none.
+    // The key path itself is covered in tests/api_keys.rs.
+    let key = http
         .get(format!("{base}/v1/api-key"))
         .bearer_auth(&access)
         .send()
         .await
-        .expect("key")
-        .json()
-        .await
-        .expect("key json");
-    assert_eq!(key["api_key_blocked"], false);
+        .expect("key");
+    assert_eq!(key.status(), 400);
     let billing: Value = http
         .get(format!("{base}/v1/billing?format=credits"))
         .bearer_auth(&access)

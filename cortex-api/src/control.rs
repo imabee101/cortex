@@ -21,7 +21,8 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::API_KEY_PREFIX;
+use crate::auth::{AuthUser, Caller};
 use crate::db::DbError;
 use crate::{AppState, CLIENT_ID, ISSUER};
 
@@ -421,14 +422,28 @@ pub async fn root() -> impl IntoResponse {
     "cortex-api\n"
 }
 
-/// Probe for a first-party API key. Credentials the server does not accept are a
-/// 401 through the extractor, so the client then leaves the key unadvertised.
-pub async fn api_key_info(AuthUser(_user): AuthUser) -> impl IntoResponse {
+/// The client probes its API key here before advertising it. A revoked or unknown key is a 401
+/// through the extractor; a live key answers with its record. There are no teams and no per-key
+/// blocking in this deployment, so a live key is never blocked or disabled.
+pub async fn api_key_info(Caller { user, api_key }: Caller) -> Response {
+    let Some(key) = api_key else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "this endpoint describes the API key the request was made with"})),
+        )
+            .into_response();
+    };
     Json(json!({
+        "api_key_id": key.id,
+        "name": key.name,
+        "redacted_api_key": format!("{API_KEY_PREFIX}…{}", key.key_suffix),
+        "user_id": user,
+        "create_time": key.created_at,
         "api_key_blocked": false,
         "api_key_disabled": false,
         "team_blocked": false,
     }))
+    .into_response()
 }
 
 /// Usage against the daily inference allowance, in the credits shape the `/usage`
