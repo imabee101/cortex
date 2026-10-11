@@ -619,21 +619,18 @@ mod auth {
             .map(|caller| caller.user)
     }
 
-    /// The client marks session tokens with `x-cortex-token-auth`; a bearer without that marker
-    /// may be an API key. A marked request is only ever checked as an access token.
+    /// A bearer is an API key when it carries the key prefix and an access token otherwise; an
+    /// access token is a JWT and never starts with it. The `x-cortex-token-auth` marker cannot
+    /// decide: the client adds it to every request for this host, an API key's included.
     async fn caller_from_headers(
         state: &AppState,
         headers: &axum::http::HeaderMap,
     ) -> Result<Caller, Response> {
-        let marked_session = match headers.get("x-cortex-token-auth") {
-            Some(header) => {
-                if header.to_str().ok() != Some(TOKEN_HEADER) {
-                    return Err(StatusCode::UNAUTHORIZED.into_response());
-                }
-                true
-            }
-            None => false,
-        };
+        if let Some(header) = headers.get("x-cortex-token-auth")
+            && header.to_str().ok() != Some(TOKEN_HEADER)
+        {
+            return Err(StatusCode::UNAUTHORIZED.into_response());
+        }
         let Some(auth) = headers.get(axum::http::header::AUTHORIZATION) else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
         };
@@ -643,7 +640,7 @@ mod auth {
         let Some(token) = auth.strip_prefix("Bearer ") else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
         };
-        let caller = if !marked_session && token.starts_with(API_KEY_PREFIX) {
+        let caller = if token.starts_with(API_KEY_PREFIX) {
             let principal = state
                 .db
                 .api_key_principal(&jwt::sha256_hex(token.as_bytes()))
