@@ -217,13 +217,13 @@ async fn migrations_are_versioned_and_rerun_clean() {
             &api.db,
             "SELECT string_agg(version::text, ',' ORDER BY version) FROM schema_migrations"
         ),
-        "1,2"
+        "1,2,3"
     );
     api.server.shutdown().await.expect("shutdown");
     let again = start("cortex_api_hard_migrate", |_| {}).await;
     assert_eq!(
         psql(&again.db, "SELECT count(*) FROM schema_migrations"),
-        "2",
+        "3",
         "a restart applies nothing twice"
     );
 }

@@ -60,7 +60,7 @@ pub async fn code_agent(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let user = match user_from_headers(&state, &headers) {
+    let user = match user_from_headers(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };
@@ -72,7 +72,7 @@ pub async fn gateway(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let user = match user_from_headers(&state, &headers) {
+    let user = match user_from_headers(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };

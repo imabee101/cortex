@@ -1,3 +1,4 @@
+mod api_keys;
 mod background;
 mod control;
 mod db;
@@ -38,6 +39,8 @@ use crate::jwt::KeySet;
 pub const ISSUER: &str = "https://llm.imabee.com";
 pub const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 pub const TOKEN_HEADER: &str = "cortex-cli";
+/// Every API key starts with this, so secret scanners and the auth path can tell it from a JWT.
+pub const API_KEY_PREFIX: &str = "cortex-";
 
 #[derive(Clone)]
 pub struct Config {
@@ -75,6 +78,8 @@ pub struct Config {
     pub max_output_tokens: u64,
     pub ip_rate_per_min: u32,
     pub user_rate_per_min: u32,
+    /// Live API keys one account may hold.
+    pub api_key_limit: i64,
     pub inference_per_min: u32,
     pub daily_inference_quota: i32,
     pub daily_search_quota: i32,
@@ -119,6 +124,7 @@ impl Config {
             max_output_tokens: 24576,
             ip_rate_per_min: 1200,
             user_rate_per_min: 1200,
+            api_key_limit: 25,
             inference_per_min: 120,
             daily_inference_quota: 5000,
             daily_search_quota: 300,
@@ -292,6 +298,11 @@ pub fn router(state: AppState) -> Router {
         .route("/oauth2/device/code", post(oidc::device_code))
         .route("/device", get(oidc::device_page))
         .route("/device/decide", post(oidc::device_decide))
+        .route(
+            api_keys::CONSOLE_PATH,
+            get(api_keys::page).post(api_keys::create),
+        )
+        .route("/account/api-keys/revoke", post(api_keys::revoke))
         .route("/healthz", get(control::healthz))
         .route("/readyz", get(control::readyz))
         .route("/metrics", get(control::metrics))
@@ -566,7 +577,14 @@ mod auth {
     use axum::http::request::Parts;
     use uuid::Uuid;
 
+    /// The account behind a request authenticated with an access token or an API key.
     pub struct AuthUser(pub Uuid);
+
+    /// The account plus, when the request used one, the API key it authenticated with.
+    pub struct Caller {
+        pub user: Uuid,
+        pub api_key: Option<db::ApiKey>,
+    }
 
     impl FromRequestParts<AppState> for AuthUser {
         type Rejection = Response;
@@ -575,22 +593,47 @@ mod auth {
             parts: &mut Parts,
             state: &AppState,
         ) -> Result<Self, Self::Rejection> {
-            user_from_headers(state, &parts.headers).map(AuthUser)
+            caller_from_headers(state, &parts.headers)
+                .await
+                .map(|caller| AuthUser(caller.user))
         }
     }
 
-    pub(crate) fn user_from_headers(
+    impl FromRequestParts<AppState> for Caller {
+        type Rejection = Response;
+
+        async fn from_request_parts(
+            parts: &mut Parts,
+            state: &AppState,
+        ) -> Result<Self, Self::Rejection> {
+            caller_from_headers(state, &parts.headers).await
+        }
+    }
+
+    pub(crate) async fn user_from_headers(
         state: &AppState,
         headers: &axum::http::HeaderMap,
     ) -> Result<Uuid, Response> {
-        if let Some(header) = headers.get("x-cortex-token-auth") {
-            let Ok(value) = header.to_str() else {
-                return Err(StatusCode::UNAUTHORIZED.into_response());
-            };
-            if value != TOKEN_HEADER {
-                return Err(StatusCode::UNAUTHORIZED.into_response());
+        caller_from_headers(state, headers)
+            .await
+            .map(|caller| caller.user)
+    }
+
+    /// The client marks session tokens with `x-cortex-token-auth`; a bearer without that marker
+    /// may be an API key. A marked request is only ever checked as an access token.
+    async fn caller_from_headers(
+        state: &AppState,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<Caller, Response> {
+        let marked_session = match headers.get("x-cortex-token-auth") {
+            Some(header) => {
+                if header.to_str().ok() != Some(TOKEN_HEADER) {
+                    return Err(StatusCode::UNAUTHORIZED.into_response());
+                }
+                true
             }
-        }
+            None => false,
+        };
         let Some(auth) = headers.get(axum::http::header::AUTHORIZATION) else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
         };
@@ -600,12 +643,29 @@ mod auth {
         let Some(token) = auth.strip_prefix("Bearer ") else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
         };
-        let claims = jwt::verify_access(token, &state.keys().published)
-            .map_err(|_| StatusCode::UNAUTHORIZED.into_response())?;
+        let caller = if !marked_session && token.starts_with(API_KEY_PREFIX) {
+            let principal = state
+                .db
+                .api_key_principal(&jwt::sha256_hex(token.as_bytes()))
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?
+                .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())?;
+            Caller {
+                user: principal.user_id,
+                api_key: Some(principal.key),
+            }
+        } else {
+            let claims = jwt::verify_access(token, &state.keys().published)
+                .map_err(|_| StatusCode::UNAUTHORIZED.into_response())?;
+            Caller {
+                user: claims.sub,
+                api_key: None,
+            }
+        };
         state
             .limiter
             .hit(
-                &format!("user:{}", claims.sub),
+                &format!("user:{}", caller.user),
                 state.config.user_rate_per_min,
                 Duration::from_secs(60),
             )
@@ -615,6 +675,6 @@ mod auth {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 too_many(retry)
             })?;
-        Ok(claims.sub)
+        Ok(caller)
     }
 }

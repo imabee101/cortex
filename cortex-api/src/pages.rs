@@ -65,7 +65,15 @@ button {{
 button.deny {{ background: transparent; color: var(--danger); border: 1px solid var(--danger); }}
 .err {{ color: var(--danger); }}
 a {{ color: var(--accent); }}
-code {{ font-family: "IBM Plex Mono", "Nimbus Mono PS", monospace; }}
+code {{ font-family: "IBM Plex Mono", "Nimbus Mono PS", monospace; overflow-wrap: anywhere; }}
+pre {{ margin: 0 0 calc(var(--s) * 2); padding: calc(var(--s) * 2); background: #fff; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }}
+.secret {{ display: block; padding: calc(var(--s) * 2); background: #fff; border: 2px solid var(--accent); color: var(--ink); }}
+table {{ width: 100%; border-collapse: collapse; margin: 0 0 calc(var(--s) * 3); }}
+th, td {{ padding: var(--s); border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }}
+th {{ font-size: 15px; color: var(--muted); font-weight: 600; }}
+td form {{ display: inline; }}
+td button {{ padding: var(--s) calc(var(--s) * 2); }}
+h2 {{ margin: calc(var(--s) * 4) 0 calc(var(--s) * 2); font-size: 20px; }}
 </style>
 </head>
 <body>
@@ -174,4 +182,71 @@ pub fn device_page(user_code: &str, signed_in: bool, next: &str) -> String {
 
 pub fn message_page(title: &str, text: &str) -> String {
     layout(title, &format!("<p>{}</p>", esc(text)))
+}
+
+/// What the API key console reports above the key list.
+pub enum KeyNotice<'a> {
+    None,
+    /// The plaintext of a key just created; this is the only time it is shown.
+    Created(&'a str),
+    Revoked,
+    Error(&'a str),
+}
+
+fn when(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+pub fn api_keys_page(keys: &[crate::db::ApiKey], csrf: &str, notice: KeyNotice<'_>) -> String {
+    let notice = match notice {
+        KeyNotice::None => String::new(),
+        KeyNotice::Created(key) => format!(
+            r#"<h2>New key</h2>
+<p>Copy this key now. It is not shown again.</p>
+<code class="secret">{key}</code>
+<p>Use it wherever Cortex runs without a browser:</p>
+<pre><code>export CORTEX_API_KEY="{key}"</code></pre>"#,
+            key = esc(key),
+        ),
+        KeyNotice::Revoked => "<p>Key revoked. Requests that use it now fail.</p>".to_owned(),
+        KeyNotice::Error(text) => format!(r#"<p class="err">{}</p>"#, esc(text)),
+    };
+    let list = if keys.is_empty() {
+        "<p>No keys yet.</p>".to_owned()
+    } else {
+        let rows: String = keys
+            .iter()
+            .map(|key| {
+                format!(
+                    r#"<tr><td>{name}</td><td><code>{prefix}…{suffix}</code></td><td>{created}</td><td>{used}</td><td><form method="post" action="/account/api-keys/revoke"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{id}"><button class="deny" type="submit">Revoke</button></form></td></tr>"#,
+                    name = esc(&key.name),
+                    prefix = crate::API_KEY_PREFIX,
+                    suffix = esc(&key.key_suffix),
+                    created = when(key.created_at),
+                    used = key.last_used_at.map(when).unwrap_or_else(|| "Never".to_owned()),
+                    csrf = esc(csrf),
+                    id = key.id,
+                )
+            })
+            .collect();
+        format!(
+            "<table><thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    };
+    layout(
+        "API keys",
+        &format!(
+            r#"<p>An API key lets Cortex run without a browser sign-in, for scripts, CI, and containers. Anyone holding a key acts as your account, so keep it secret and revoke it when you no longer need it.</p>
+{notice}
+<h2>Your keys</h2>
+{list}
+<h2>Create a key</h2>
+<form method="post" action="/account/api-keys">
+<input type="hidden" name="csrf" value="{csrf}">
+<label>Name <input name="name" maxlength="64" placeholder="ci-runner" required></label>
+<button type="submit">Create key</button>
+</form>"#,
+            csrf = esc(csrf),
+        ),
+    )
 }

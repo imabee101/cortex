@@ -74,6 +74,9 @@ struct Args {
     ip_rate_per_min: u32,
     #[arg(long, env = "CORTEX_API_USER_RATE_PER_MIN", default_value_t = 1200)]
     user_rate_per_min: u32,
+    /// Live API keys one account may hold.
+    #[arg(long, env = "CORTEX_API_KEY_LIMIT", default_value_t = 25)]
+    api_key_limit: i64,
     #[arg(long, env = "CORTEX_API_INFERENCE_PER_MIN", default_value_t = 120)]
     inference_per_min: u32,
     #[arg(long, env = "CORTEX_API_DAILY_INFERENCE_QUOTA", default_value_t = 5000)]
@@ -141,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
     config.max_output_tokens = args.max_output_tokens;
     config.ip_rate_per_min = args.ip_rate_per_min;
     config.user_rate_per_min = args.user_rate_per_min;
+    config.api_key_limit = args.api_key_limit;
     config.inference_per_min = args.inference_per_min;
     config.daily_inference_quota = args.daily_inference_quota;
     config.daily_search_quota = args.daily_search_quota;
