@@ -39,6 +39,8 @@ jobs:
       pull-requests: read                     # the merged PR's minor/major label
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
+      client: ${{ steps.changes.outputs.client }}
+      server: ${{ steps.changes.outputs.server }}
       version: ${{ steps.id.outputs.version }}
       build_id: ${{ steps.id.outputs.build_id }}
     steps:
@@ -53,18 +55,23 @@ jobs:
         run: |
           set -euo pipefail
           # Docs, deploy files and non-Rust paths skip every Rust job (and consume no build number).
-          rust_paths='^(crates/|cortex-api/|prod/|third_party/|bin/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/)'
+          # client: anything the shipped binary is built from; it rebuilds every platform. server: cortex-api
+          # alone, which builds and deploys only cortex-api. A workflow-only change runs the checks only.
+          client_paths='^(crates/|prod/|third_party/|bin/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'
+          server_paths='^cortex-api/'
           if [ -z "${BASE:-}" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            rust=true
-          elif git diff --name-only "$BASE" HEAD | grep -qE "$rust_paths"; then
-            rust=true
+            client=true; server=true; rust=true
           else
-            rust=false
+            changed=$(git diff --name-only "$BASE" HEAD)
+            client=false; server=false; rust=false
+            if grep -qE "$client_paths" <<< "$changed"; then client=true; fi
+            if grep -qE "$server_paths" <<< "$changed"; then server=true; fi
+            if [ "$client$server" != falsefalse ] || grep -q '^\.github/workflows/' <<< "$changed"; then rust=true; fi
           fi
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          printf 'rust=%s\nclient=%s\nserver=%s\n' "$rust" "$client" "$server" >> "$GITHUB_OUTPUT"
       - name: build id
         id: id
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.rust == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.changes.outputs.client == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -166,6 +173,38 @@ jobs:
           for db in cortex_api_infer cortex_api_phase4; do psql postgres://127.0.0.1/cortex_api_test -c "CREATE DATABASE $db"; done
           cargo llvm-cov nextest -p cortex-api --locked --lcov --output-path lcov.info
           cargo test -p cortex-api --doc --locked
+      - name: end to end with the published client
+        # The released client signs in with an API key at https://llm.imabee.com over TLS and completes
+        # inference through this cortex-api, Caddy with the production edge config and a real model on CPU.
+        # llama.cpp b11371 is the commit production runs; Caddy is production's version.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LLAMA_TAG: b11371
+          LLAMA_SHA: db196f9edb3be6297604063b17a0d1a47d579250d5dfb0ded8baa9674f5ef1d1
+          CADDY_VERSION: 2.11.4
+          CADDY_SHA: 527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
+          MODEL_URL: https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf
+          MODEL_SHA: bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
+        run: |
+          set -euo pipefail
+          cargo build -p cortex-api --locked
+          T=$RUNNER_TEMP/e2e; mkdir -p "$T"; cd "$T"
+          fetch() { curl -fsSL --retry 3 -o "$2" "$1"; echo "$3  $2" | sha256sum -c --quiet -; }
+          fetch "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/llama-$LLAMA_TAG-bin-ubuntu-x64.tar.gz" llama.tar.gz "$LLAMA_SHA"
+          fetch "https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" caddy.tar.gz "$CADDY_SHA"
+          fetch "$MODEL_URL" model.gguf "$MODEL_SHA"
+          tar -xzf llama.tar.gz
+          tar -xzf caddy.tar.gz caddy
+          if ldd "llama-$LLAMA_TAG/llama-server" | grep 'not found'; then exit 1; fi
+          gh release download --repo "$REPO" --pattern 'cortex-[0-9]*-linux-x86_64' --pattern SHA256SUMS
+          client=$(ls cortex-[0-9]*-linux-x86_64)
+          grep " $client\$" SHA256SUMS | sha256sum -c --quiet -
+          chmod +x "$client"
+          printf '127.0.0.1 llm.imabee.com\n::1 llm.imabee.com\n' | sudo tee -a /etc/hosts > /dev/null
+          CORTEX="$T/$client" CORTEX_API="$GITHUB_WORKSPACE/target/debug/cortex-api" \
+            LLAMA_SERVER="$T/llama-$LLAMA_TAG/llama-server" MODEL="$T/model.gguf" CADDY="$T/caddy" \
+            DATABASE_URL=postgres://runner@127.0.0.1/cortex_e2e "$GITHUB_WORKSPACE/cortex-api/tests/e2e/run.sh"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
@@ -197,11 +236,11 @@ jobs:
           tool: cargo-nextest
       - run: brew install protobuf && cargo nextest run -p cortex-update --locked
 
-  # Stage 4, release build: main only, Rust changed, every gate green. One build per target, never
+  # Stage 4, release build: main only, client changed, every gate green. One build per target, never
   # repeated elsewhere: publish, deploy and promote only move these artifacts.
   build:
     needs: [gates, tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gates.outputs.rust == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gates.outputs.client == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -252,6 +291,15 @@ jobs:
           key: release-${{ matrix.platform }}-${{ hashFiles('rust-toolchain.toml') }}
           add-rust-environment-hash-key: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # rust-cache keeps third-party crates but strips the 108 workspace crates, which then rebuilt every
+      # time. sccache caches each workspace library by the hash of its inputs, so only what changed
+      # recompiles; it cannot cache bin or proc-macro crates or incremental builds (CARGO_INCREMENTAL=0).
+      # The wrapper is set only after sccache is installed: earlier steps run cargo too.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+      - name: compile through sccache
+        run: printf 'SCCACHE_GHA_ENABLED=true\nRUSTC_WRAPPER=sccache\n' >> "$GITHUB_ENV"
       - name: cross toolchain
         if: matrix.xwin
         # C dependencies (ring, aws-lc) are compiled with clang-cl and archived with llvm-lib.
@@ -527,10 +575,83 @@ jobs:
               --title "Cortex $STABLE" --notes "Build ${BUILD_TAG#v}, deployed to the update feed. Install: \`curl -fsSL https://llm.imabee.com/cli/install.sh | bash\`"
           fi
 
+  # Server-only change (cortex-api, no client path): build cortex-api alone, then deploy it alone. The
+  # clients, the update feed and the version are untouched, so nothing waits on the platform builds.
+  api-build:
+    needs: [gates, tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gates.outputs.client != 'true' && needs.gates.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.94.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: api-release-${{ hashFiles('rust-toolchain.toml') }}
+          add-rust-environment-hash-key: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: build
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-gnu -p cortex-api
+          mkdir out
+          install -m 0755 target/x86_64-unknown-linux-gnu/release/cortex-api out/cortex-api
+          (cd out && sha256sum cortex-api > cortex-api.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cortex-api-${{ github.sha }}
+          path: out/*
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  api-deploy:
+    needs: [gates, api-build]
+    runs-on: [self-hosted, cortex-prod]
+    environment: production
+    timeout-minutes: 30
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cortex-api-${{ github.sha }}
+          path: ${{ runner.temp }}/api
+      - name: switch cortex-api
+        run: |
+          set -euo pipefail
+          A=$RUNNER_TEMP/api
+          (cd "$A" && sha256sum -c cortex-api.sha256)
+          printf 'PREV_REL=%s\n' "$(readlink -f /opt/cortex/current)" > "$RUNNER_TEMP/prev.env"
+          rel=/opt/cortex/releases/$(date -u +%Y%m%dT%H%M%SZ)
+          install -d "$rel"
+          install -m 0755 "$A/cortex-api" "$rel/cortex-api"
+          touch "$RUNNER_TEMP/api-switched"
+          sudo -n /usr/bin/ln -sfn "$rel" /opt/cortex/current
+          sudo -n /usr/bin/systemctl restart cortex-api.service
+          for _ in $(seq 150); do curl -sf -m 2 http://127.0.0.1:8787/readyz > /dev/null && break; sleep 2; done
+          curl -sf -m 15 https://llm.imabee.com/readyz > /dev/null
+      - name: roll back
+        if: failure()
+        run: |
+          set -uo pipefail
+          [ -f "$RUNNER_TEMP/api-switched" ] && [ -f "$RUNNER_TEMP/prev.env" ] || exit 0
+          PREV_REL=""
+          . "$RUNNER_TEMP/prev.env"
+          [ -d "$PREV_REL" ] || exit 0
+          sudo -n /usr/bin/ln -sfn "$PREV_REL" /opt/cortex/current
+          sudo -n /usr/bin/systemctl restart cortex-api.service
+          echo "rolled back to $PREV_REL" >&2
+
   # Single required status check for branch protection and auto-merge.
   ci-ok:
     if: always()
-    needs: [gates, tests, native, build, publish, deploy, promote]
+    needs: [gates, tests, native, build, publish, deploy, promote, api-build, api-deploy]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
