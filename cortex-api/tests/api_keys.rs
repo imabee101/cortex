@@ -122,6 +122,10 @@ async fn revoke(http: &reqwest::Client, base: &str, csrf: &str, id: &str) -> (St
     )
 }
 
+fn unknown_key() -> String {
+    format!("cortex-{}", "A".repeat(43))
+}
+
 async fn probe(base: &str, bearer: Option<&str>, session_marker: bool) -> reqwest::Response {
     let mut request = http_client().get(format!("{base}/v1/api-key"));
     if let Some(bearer) = bearer {
@@ -215,14 +219,28 @@ async fn api_keys_are_created_used_and_revoked_through_the_console() {
         .expect("models");
     assert_eq!(models.status(), StatusCode::OK);
 
-    // A request marked as a session token is never checked as a key; unknown or missing keys fail.
+    // The client marks every request for this host, so a marked key still authenticates, inference
+    // included; unknown or missing keys fail.
     assert_eq!(
         probe(&base, Some(&key), true).await.status(),
+        StatusCode::OK
+    );
+    let marked_inference = http_client()
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(&key)
+        .header("x-cortex-token-auth", "cortex-cli")
+        .json(&serde_json::json!({"messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .expect("inference");
+    assert_ne!(marked_inference.status(), StatusCode::UNAUTHORIZED);
+    assert_ne!(marked_inference.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        probe(&base, Some(&unknown_key()), true).await.status(),
         StatusCode::UNAUTHORIZED
     );
-    let unknown = format!("cortex-{}", "A".repeat(43));
     assert_eq!(
-        probe(&base, Some(&unknown), false).await.status(),
+        probe(&base, Some(&unknown_key()), false).await.status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
