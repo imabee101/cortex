@@ -1,0 +1,29 @@
+# The production edge (deploy/Caddyfile) on loopback, with the CI certificate in place of the real one.
+{
+	admin off
+	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_body 10m
+			read_header 30s
+			write 0
+			idle 10m
+		}
+	}
+}
+
+https://llm.imabee.com {
+	bind 127.0.0.1 [::1]
+	tls {$E2E_DIR}/tls/leaf.pem {$E2E_DIR}/tls/leaf.key
+	request_body {
+		max_size 32MB
+	}
+	reverse_proxy 127.0.0.1:{$E2E_API_PORT} {
+		flush_interval -1
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+			dial_timeout 10s
+		}
+	}
+}
