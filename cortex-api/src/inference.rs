@@ -428,7 +428,20 @@ async fn forward(
     {
         object.insert("model".to_owned(), json!(state.config.model_id));
     }
+    // llama-server answers an image it cannot read with a 500, which the client retries until the
+    // turn times out. The coded 400 is the rejection the client recovers from: it drops the image and
+    // resends the turn.
+    if !state.vision.load(Ordering::Relaxed)
+        && ["messages", "input"]
+            .iter()
+            .any(|key| payload.get(*key).is_some_and(carries_image))
+    {
+        return image_rejected();
+    }
     demote_late_system(&mut payload);
+    if path.ends_with("/chat/completions") {
+        force_named_tool(&mut payload);
+    }
     cap_output(
         &mut payload,
         if path.ends_with("/responses") {
@@ -574,6 +587,59 @@ fn sse_response(status: reqwest::StatusCode, retry_after: Option<&str>, body: Bo
         response.headers_mut().insert(RETRY_AFTER, value);
     }
     response
+}
+
+/// llama-server takes `tool_choice` only as a string and drops the object that names one function,
+/// so the call ran unforced. `required` over the named tool alone is the same constraint.
+fn force_named_tool(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(name) = object
+        .get("tool_choice")
+        .and_then(|choice| choice.pointer("/function/name"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let Some(Value::Array(tools)) = object.get_mut("tools") else {
+        return;
+    };
+    let named =
+        |tool: &Value| tool.pointer("/function/name").and_then(Value::as_str) == Some(&name);
+    if !tools.iter().any(named) {
+        return;
+    }
+    tools.retain(named);
+    object.insert("tool_choice".to_owned(), json!("required"));
+}
+
+/// Image content in any of the three request shapes: chat `image_url`, responses `input_image`,
+/// messages `image`, including images nested in tool results. Tool schemas are never scanned.
+fn carries_image(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("image_url" | "input_image" | "image")
+            ) || map.values().any(carries_image)
+        }
+        Value::Array(items) => items.iter().any(carries_image),
+        _ => false,
+    }
+}
+
+fn image_rejected() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        axum::Json(json!({"error": {
+            "message": "the served model does not accept image input",
+            "type": "invalid_request_error",
+            "code": "invalid_image",
+        }})),
+    )
+        .into_response()
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
