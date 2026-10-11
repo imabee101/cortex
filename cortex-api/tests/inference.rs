@@ -234,6 +234,77 @@ async fn inference_normalizes_llama_shapes() {
         "{metrics}"
     );
 
+    // The served model has no vision: images in any shape get the coded rejection the client
+    // recovers from (drop the image, resend), and never reach llama.
+    let png = "data:image/png;base64,iVBORw0KGgo=";
+    for (path, body) in [
+        (
+            "chat/completions",
+            json!({"model": "m", "messages": [{"role": "tool", "tool_call_id": "t", "content": [
+                {"type": "text", "text": "file"},
+                {"type": "image_url", "image_url": {"url": png}}]}]}),
+        ),
+        (
+            "responses",
+            json!({"model": "m", "input": [{"role": "user", "content": [
+                {"type": "input_image", "image_url": png}]}]}),
+        ),
+        (
+            "messages",
+            json!({"model": "m", "messages": [{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}]}),
+        ),
+    ] {
+        let before = UPSTREAM_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        let rejected = http
+            .post(format!("{base}/v1/{path}"))
+            .bearer_auth(access)
+            .json(&body)
+            .send()
+            .await
+            .expect("image request");
+        assert_eq!(rejected.status(), 400, "{path}");
+        let error: Value = rejected.json().await.expect("error json");
+        assert_eq!(error["error"]["code"], "invalid_image", "{path}");
+        assert_eq!(
+            UPSTREAM_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "{path} reached llama"
+        );
+    }
+    // A call forced to one function reaches llama in the string form it honors.
+    let tool = |name: &str| json!({"type": "function", "function": {"name": name, "parameters": {"type": "object"}}});
+    http.post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(
+            &json!({"model": "forced", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [tool("session_title"), tool("other")],
+            "tool_choice": {"type": "function", "function": {"name": "session_title"}}}),
+        )
+        .send()
+        .await
+        .expect("forced")
+        .bytes()
+        .await
+        .expect("forced body");
+    let sent = LAST_TOOLING.lock().expect("lock").clone();
+    assert_eq!(sent["tool_choice"], "required");
+    assert_eq!(sent["tools"], json!([tool("session_title")]));
+
+    // A tool schema that names an image property is not image content.
+    let schema = http
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(
+            &json!({"model": "m", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters":
+                {"type": "object", "properties": {"image": {"type": "image"}}}}}]}),
+        )
+        .send()
+        .await
+        .expect("schema");
+    assert_eq!(schema.status(), 200);
+
     let responses = http
         .post(format!("{base}/v1/responses"))
         .bearer_auth(access)
@@ -283,6 +354,8 @@ async fn props() -> impl IntoResponse {
     Json(json!({"default_generation_settings": {"n_ctx": 4096}}))
 }
 
+static LAST_TOOLING: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
+static UPSTREAM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LAST_MAX_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LOOP_DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -294,6 +367,7 @@ impl Drop for DropFlag {
 }
 
 async fn chat(request: Request) -> axum::response::Response {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
         .await
         .unwrap_or_default();
@@ -302,6 +376,10 @@ async fn chat(request: Request) -> axum::response::Response {
         payload["max_tokens"].as_u64().unwrap_or(0),
         std::sync::atomic::Ordering::SeqCst,
     );
+    if payload["model"] == "forced" {
+        *LAST_TOOLING.lock().expect("lock") =
+            json!({"tool_choice": payload["tool_choice"], "tools": payload["tools"]});
+    }
     if payload["model"] == "loop" {
         // Never ends on its own: the same sentence for as long as the client listens.
         let endless = futures_util::stream::unfold(DropFlag, |flag| async move {
@@ -344,6 +422,7 @@ async fn chat(request: Request) -> axum::response::Response {
 }
 
 async fn responses(request: Request) -> impl IntoResponse {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _ = axum::body::to_bytes(request.into_body(), 1024 * 1024).await;
     (
         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
@@ -352,6 +431,7 @@ async fn responses(request: Request) -> impl IntoResponse {
 }
 
 async fn messages(request: Request) -> axum::response::Response {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
         .await
         .unwrap_or_default();
