@@ -67,9 +67,6 @@ struct Args {
     queue_max: usize,
     #[arg(long, env = "CORTEX_API_QUEUE_WAIT_SECS", default_value_t = 30)]
     queue_wait_secs: u64,
-    /// Ceiling on generated tokens per request; 0 leaves requests unbounded.
-    #[arg(long, env = "CORTEX_API_MAX_OUTPUT_TOKENS", default_value_t = 24576)]
-    max_output_tokens: u64,
     #[arg(long, env = "CORTEX_API_IP_RATE_PER_MIN", default_value_t = 1200)]
     ip_rate_per_min: u32,
     #[arg(long, env = "CORTEX_API_USER_RATE_PER_MIN", default_value_t = 1200)]
@@ -141,7 +138,6 @@ async fn main() -> anyhow::Result<()> {
     config.parallel = args.parallel;
     config.queue_max = args.queue_max;
     config.queue_wait_secs = args.queue_wait_secs;
-    config.max_output_tokens = args.max_output_tokens;
     config.ip_rate_per_min = args.ip_rate_per_min;
     config.user_rate_per_min = args.user_rate_per_min;
     config.api_key_limit = args.api_key_limit;
