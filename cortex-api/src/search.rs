@@ -318,11 +318,6 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
     let url = format!("{}/v1/responses", origin.trim_end_matches('/'));
     let mut payload = payload.clone();
     inference::demote_late_system(&mut payload);
-    inference::cap_output(
-        &mut payload,
-        "max_output_tokens",
-        state.config.max_output_tokens,
-    );
     let mut request = state.http.post(url).json(&payload);
     if let Some(key) = state
         .config

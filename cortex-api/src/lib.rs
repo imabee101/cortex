@@ -75,7 +75,6 @@ pub struct Config {
     pub queue_max: usize,
     pub queue_wait_secs: u64,
     /// Ceiling on generated tokens per request; 0 leaves requests unbounded.
-    pub max_output_tokens: u64,
     pub ip_rate_per_min: u32,
     pub user_rate_per_min: u32,
     /// Live API keys one account may hold.
@@ -121,7 +120,6 @@ impl Config {
             parallel: 0,
             queue_max: 8,
             queue_wait_secs: 30,
-            max_output_tokens: 24576,
             ip_rate_per_min: 1200,
             user_rate_per_min: 1200,
             api_key_limit: 25,
@@ -148,7 +146,6 @@ pub struct AppState {
     /// Streams cut because the model was repeating itself.
     pub loops_aborted: Arc<AtomicU64>,
     /// Streams cut because the output ceiling ended a generation that was all reasoning.
-    pub reasoning_overruns: Arc<AtomicU64>,
     pub draining: Arc<AtomicBool>,
     pub limiter: Arc<limits::Limiter>,
     pub llama_breaker: Arc<limits::Breaker>,
@@ -250,7 +247,6 @@ pub async fn serve(config: Config) -> anyhow::Result<Running> {
         requests: Arc::new(AtomicU64::new(0)),
         throttled: Arc::new(AtomicU64::new(0)),
         loops_aborted: Arc::new(AtomicU64::new(0)),
-        reasoning_overruns: Arc::new(AtomicU64::new(0)),
         draining: Arc::new(AtomicBool::new(false)),
         limiter: Arc::new(limits::Limiter::default()),
         llama_breaker: Arc::new(limits::Breaker::new(5, 15_000)),

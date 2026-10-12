@@ -124,11 +124,9 @@ async fn inference_normalizes_llama_shapes() {
     );
     assert!(chat_body.contains("[DONE]"));
 
-    // Every request reaches the model with an output ceiling; a client's own lower limit is kept.
-    assert_eq!(
-        LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst),
-        24576
-    );
+    // No output limit is added: a reply ends when the model stops or the context is full, which is
+    // what the harness assumes of a length finish. A limit the client sets itself is passed on.
+    assert_eq!(LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst), 0);
     http.post(format!("{base}/v1/chat/completions"))
         .bearer_auth(access)
         .json(&json!({"model": "m", "max_tokens": 77, "messages": [{"role": "user", "content": "hi"}]}))
@@ -183,33 +181,12 @@ async fn inference_normalizes_llama_shapes() {
         "{metrics}"
     );
 
-    // The output ceiling ending a generation that never left its reasoning is a broken stream the
-    // client retries; the same finish after an answer, or under the client's own limit, is not.
-    let overrun = http
-        .post(format!("{base}/v1/chat/completions"))
-        .bearer_auth(access)
-        .json(&json!({"model": "overrun", "stream": true, "messages": [{"role": "user", "content": "hi"}]}))
-        .send()
-        .await
-        .expect("overrun");
-    assert_eq!(overrun.status(), 200);
-    assert!(
-        overrun.bytes().await.is_err(),
-        "a reasoning-only generation cut by our ceiling must end in an error the client retries"
-    );
-    for (model, extra) in [
-        ("longanswer", json!({})),
-        ("overrun", json!({"max_tokens": 77})),
-    ] {
-        let mut request = json!({"model": model, "stream": true, "messages": [{"role": "user", "content": "hi"}]});
-        request
-            .as_object_mut()
-            .expect("object")
-            .extend(extra.as_object().expect("object").clone());
+    // A length finish, with or without an answer, passes through untouched.
+    for model in ["longanswer", "reasoningonly"] {
         let kept = http
             .post(format!("{base}/v1/chat/completions"))
             .bearer_auth(access)
-            .json(&request)
+            .json(&json!({"model": model, "stream": true, "messages": [{"role": "user", "content": "hi"}]}))
             .send()
             .await
             .expect("kept")
@@ -221,18 +198,6 @@ async fn inference_normalizes_llama_shapes() {
             "{model}: {kept}"
         );
     }
-    let metrics = http
-        .get(format!("{base}/metrics"))
-        .send()
-        .await
-        .expect("metrics")
-        .text()
-        .await
-        .expect("metrics text");
-    assert!(
-        metrics.contains("cortex_api_reasoning_overruns_total 1"),
-        "{metrics}"
-    );
 
     // The served model has no vision: images in any shape get the coded rejection the client
     // recovers from (drop the image, resend), and never reach llama.
@@ -415,8 +380,8 @@ async fn chat(request: Request) -> axum::response::Response {
         )
             .into_response();
     }
-    if payload["model"] == "overrun" || payload["model"] == "longanswer" {
-        let field = if payload["model"] == "overrun" {
+    if payload["model"] == "reasoningonly" || payload["model"] == "longanswer" {
+        let field = if payload["model"] == "reasoningonly" {
             "reasoning_content"
         } else {
             "content"

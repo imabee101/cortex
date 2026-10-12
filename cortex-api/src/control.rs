@@ -70,7 +70,6 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
          cortex_api_inference_waiting {}\n\
          cortex_api_inference_rejected_total {}\n\
          cortex_api_loops_aborted_total {}\n\
-         cortex_api_reasoning_overruns_total {}\n\
          cortex_api_llama_breaker_open {}\n\
          cortex_api_search_breaker_open {}\n",
         state.requests.load(Relaxed),
@@ -80,7 +79,6 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         state.slots.waiting(),
         state.slots.rejected.load(Relaxed),
         state.loops_aborted.load(Relaxed),
-        state.reasoning_overruns.load(Relaxed),
         u8::from(state.llama_breaker.is_open()),
         u8::from(state.search.breaker.is_open()),
     );

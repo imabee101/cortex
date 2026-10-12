@@ -366,40 +366,6 @@ pub(crate) fn demote_late_system(payload: &mut Value) {
     }
 }
 
-/// A generation that never stops (a model stuck repeating itself, a request with no limit)
-/// holds the only slot while everyone else queues and then fails. Every request gets a ceiling:
-/// the client's own limit when it is lower, otherwise `cap`. Zero turns the ceiling off.
-pub(crate) fn cap_output(payload: &mut Value, default_key: &str, cap: u64) {
-    if cap == 0 {
-        return;
-    }
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    let mut present = false;
-    for key in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
-        if let Some(value) = object.get_mut(key) {
-            present = true;
-            if value.as_u64().is_none_or(|asked| asked > cap) {
-                *value = json!(cap);
-            }
-        }
-    }
-    if !present {
-        object.insert(default_key.to_owned(), json!(cap));
-    }
-}
-
-/// True when the ceiling `cap_output` applied is what limits the request, not a lower limit the
-/// client asked for.
-pub(crate) fn cap_binds(payload: &Value, cap: u64) -> bool {
-    let limits: Vec<u64> = ["max_tokens", "max_completion_tokens", "max_output_tokens"]
-        .iter()
-        .filter_map(|key| payload.get(*key).and_then(Value::as_u64))
-        .collect();
-    cap != 0 && !limits.is_empty() && limits.iter().all(|limit| *limit == cap)
-}
-
 async fn forward(
     state: &AppState,
     user: uuid::Uuid,
@@ -455,16 +421,6 @@ async fn forward(
     if path.ends_with("/chat/completions") {
         force_named_tool(&mut payload);
     }
-    cap_output(
-        &mut payload,
-        if path.ends_with("/responses") {
-            "max_output_tokens"
-        } else {
-            "max_tokens"
-        },
-        state.config.max_output_tokens,
-    );
-    let cap_binds = cap_binds(&payload, state.config.max_output_tokens);
     let stream = payload
         .get("stream")
         .and_then(|value| value.as_bool())
@@ -531,13 +487,7 @@ async fn forward(
     }
     if stream || content_type.contains("text/event-stream") {
         let stream = upstream.bytes_stream();
-        let body = Body::from_stream(rewrite_stream(
-            stream,
-            permit,
-            state.loops_aborted.clone(),
-            state.reasoning_overruns.clone(),
-            cap_binds,
-        ));
+        let body = Body::from_stream(rewrite_stream(stream, permit, state.loops_aborted.clone()));
         return sse_response(status, retry_after.as_deref(), body);
     }
     let bytes = match upstream.bytes().await {
@@ -731,8 +681,6 @@ fn rewrite_stream(
     incoming: impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
     permit: OwnedSemaphorePermit,
     loops_aborted: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    reasoning_overruns: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    cap_binds: bool,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send {
     futures_util::stream::unfold(
         StreamState {
@@ -740,8 +688,6 @@ fn rewrite_stream(
             fixer: SseFix::default(),
             guard: LoopGuard::default(),
             loops_aborted,
-            reasoning_overruns,
-            cap_binds,
             finished: false,
             _permit: permit,
         },
@@ -760,20 +706,6 @@ fn rewrite_stream(
                             tracing::warn!("model output is repeating itself; stream cut");
                             return Some((
                                 Err(std::io::Error::other("generation was repeating itself")),
-                                state,
-                            ));
-                        }
-                        if state.cap_binds && state.guard.overran() {
-                            // The ceiling cut a generation that never left its reasoning. The
-                            // harness does not retry a length finish but does retry a broken
-                            // stream, and a fresh sample usually answers.
-                            state.finished = true;
-                            state.reasoning_overruns.fetch_add(1, Ordering::Relaxed);
-                            tracing::warn!(
-                                "generation spent its whole output ceiling reasoning; stream cut"
-                            );
-                            return Some((
-                                Err(std::io::Error::other("generation never left its reasoning")),
                                 state,
                             ));
                         }
@@ -806,8 +738,6 @@ struct StreamState {
     fixer: SseFix,
     guard: LoopGuard,
     loops_aborted: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    reasoning_overruns: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    cap_binds: bool,
     finished: bool,
     _permit: OwnedSemaphorePermit,
 }
@@ -820,10 +750,6 @@ struct LoopGuard {
     lines: Vec<u8>,
     text: Vec<u8>,
     unchecked: usize,
-    /// An answer or a tool call has started.
-    answered: bool,
-    /// The upstream finished because it ran out of tokens.
-    length: bool,
 }
 
 impl LoopGuard {
@@ -834,56 +760,11 @@ impl LoopGuard {
     /// Fewer than this share of the sampled pieces being distinct counts as a loop.
     const DISTINCT_BELOW: f64 = 0.10;
 
-    /// True when the generation ended at the token limit having produced reasoning only.
-    fn overran(&self) -> bool {
-        self.length && !self.answered
-    }
-
-    /// Record whether a line carries an answer or tool call, or a finish at the token limit,
-    /// in any of the three protocols.
-    fn note(&mut self, line: &[u8]) {
-        let Some(data) = trim_ascii_end(line).strip_prefix(b"data:") else {
-            return;
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(trim_ascii_start(data)) else {
-            return;
-        };
-        let text = |pointer: &str| {
-            value
-                .pointer(pointer)
-                .and_then(Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty())
-        };
-        let has = |pointer: &str| value.pointer(pointer).is_some_and(|found| !found.is_null());
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-        if text("/choices/0/delta/content")
-            || has("/choices/0/delta/tool_calls")
-            || text("/delta/text")
-            || has("/delta/partial_json")
-            || value.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use")
-            || (kind.ends_with("output_text.delta") && text("/delta"))
-            || kind == "response.function_call_arguments.delta"
-            || value.pointer("/item/type").and_then(Value::as_str) == Some("function_call")
-        {
-            self.answered = true;
-        }
-        if value
-            .pointer("/choices/0/finish_reason")
-            .and_then(Value::as_str)
-            == Some("length")
-            || value.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("max_tokens")
-            || kind == "response.incomplete"
-        {
-            self.length = true;
-        }
-    }
-
     /// Feed raw SSE bytes; true when the model is looping.
     fn feed(&mut self, bytes: &[u8]) -> bool {
         self.lines.extend_from_slice(bytes);
         while let Some(pos) = self.lines.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = self.lines.drain(..=pos).collect();
-            self.note(&line);
             if let Some(delta) = visible_delta(&line) {
                 self.text.extend_from_slice(delta.as_bytes());
                 self.unchecked += delta.len();
@@ -1246,86 +1127,6 @@ mod tests {
                 "tool arguments are not watched"
             );
         }
-    }
-
-    #[test]
-    fn only_a_reasoning_only_generation_cut_at_the_limit_counts_as_an_overrun() {
-        let finish = |reason: &str| {
-            format!(
-                "data: {}\n\n",
-                json!({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]})
-            )
-            .into_bytes()
-        };
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("reasoning_content", "hmm, let me think. "));
-        guard.feed(&chat_line("content", "\n\n"));
-        assert!(!guard.overran(), "no finish yet");
-        guard.feed(&finish("length"));
-        assert!(guard.overran());
-
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("reasoning_content", "hmm"));
-        guard.feed(&finish("stop"));
-        assert!(!guard.overran(), "a normal stop is not an overrun");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("content", "Here is the file."));
-        guard.feed(&finish("length"));
-        assert!(!guard.overran(), "an answer was started");
-
-        let mut guard = LoopGuard::default();
-        let call =
-            json!({"choices": [{"delta": {"tool_calls": [{"function": {"arguments": "{"}}]}}]});
-        guard.feed(format!("data: {call}\n\n").as_bytes());
-        guard.feed(&finish("length"));
-        assert!(!guard.overran(), "a tool call was started");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(
-            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hm\"}}\n\n",
-        );
-        guard.feed(
-            b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
-        );
-        assert!(guard.overran(), "messages protocol");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(b"data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"hm\"}\n\n");
-        guard.feed(b"data: {\"type\":\"response.incomplete\"}\n\n");
-        assert!(guard.overran(), "responses protocol");
-    }
-
-    #[test]
-    fn the_ceiling_binds_only_when_the_client_asked_for_no_less() {
-        assert!(cap_binds(&json!({"max_tokens": 100}), 100));
-        assert!(!cap_binds(&json!({"max_tokens": 77}), 100));
-        assert!(!cap_binds(
-            &json!({"max_tokens": 100, "max_completion_tokens": 7}),
-            100
-        ));
-        assert!(
-            !cap_binds(&json!({"messages": []}), 100),
-            "no limit applied"
-        );
-        assert!(!cap_binds(&json!({"max_tokens": 100}), 0), "ceiling off");
-    }
-
-    #[test]
-    fn every_request_gets_an_output_ceiling() {
-        let mut open = json!({"messages": []});
-        cap_output(&mut open, "max_tokens", 100);
-        assert_eq!(open["max_tokens"], 100);
-        let mut high = json!({"max_tokens": 5000, "max_completion_tokens": 7});
-        cap_output(&mut high, "max_tokens", 100);
-        assert_eq!(high["max_tokens"], 100);
-        assert_eq!(high["max_completion_tokens"], 7);
-        let mut responses = json!({"input": []});
-        cap_output(&mut responses, "max_output_tokens", 100);
-        assert_eq!(responses["max_output_tokens"], 100);
-        let mut off = json!({});
-        cap_output(&mut off, "max_tokens", 0);
-        assert!(off.get("max_tokens").is_none());
     }
 
     #[test]
