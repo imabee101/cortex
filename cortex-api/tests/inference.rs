@@ -305,6 +305,28 @@ async fn inference_normalizes_llama_shapes() {
         .expect("schema");
     assert_eq!(schema.status(), 200);
 
+    // A client that stops sending its body mid-request (the harness cancelling a side call at shutdown) is
+    // answered 499, not counted as a request the server refused.
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(running.addr)
+            .await
+            .expect("connect");
+        socket
+            .write_all(
+                format!(
+                    "POST /v1/chat/completions HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {access}\r\ncontent-type: application/json\r\ncontent-length: 1000\r\n\r\n{{\"model\":"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write");
+        socket.shutdown().await.expect("half-close");
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer).await.expect("read");
+        assert!(answer.starts_with("HTTP/1.1 499"), "{answer}");
+    }
+
     let responses = http
         .post(format!("{base}/v1/responses"))
         .bearer_auth(access)

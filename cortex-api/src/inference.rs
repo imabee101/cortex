@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_ENCODING;
@@ -33,8 +34,12 @@ pub async fn chat(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     forward(&state, user, "/v1/chat/completions", headers, body).await
 }
 
@@ -42,8 +47,12 @@ pub async fn responses(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     match crate::search::maybe(&state, user, &headers, &body).await {
         crate::search::Outcome::Answer(response) => response,
         crate::search::Outcome::Rewritten(body) => {
@@ -250,8 +259,12 @@ pub async fn messages(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     forward(&state, user, "/v1/messages", headers, body).await
 }
 
@@ -640,6 +653,21 @@ fn image_rejected() -> Response {
         }})),
     )
         .into_response()
+}
+
+/// A body that fails to arrive is almost always a client that hung up mid-upload: the harness cancels its
+/// side calls when a session ends. That is answered with 499 (client closed request), as nginx logs it, so
+/// it never reads as a request the server refused. Other rejections, such as an oversized body, stand.
+fn received(body: Result<Bytes, BytesRejection>) -> Result<Bytes, Response> {
+    match body {
+        Ok(body) => Ok(body),
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::UnknownBodyError(_))) => {
+            Err(StatusCode::from_u16(499)
+                .expect("invariant: 499 is a valid status code")
+                .into_response())
+        }
+        Err(rejection) => Err(rejection.into_response()),
+    }
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
