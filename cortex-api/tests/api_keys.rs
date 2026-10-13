@@ -2,9 +2,11 @@
 #![allow(clippy::disallowed_methods)]
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 // A database of its own: test binaries run in parallel, and the server creates it on start.
 const DB_NAME: &str = "cortex_api_keys_test";
@@ -218,6 +220,41 @@ async fn api_keys_are_created_used_and_revoked_through_the_console() {
         .await
         .expect("models");
     assert_eq!(models.status(), StatusCode::OK);
+
+    // An API-key client never fetches the settings that switch image, video and voice off, so its calls
+    // reach the server and are answered with the missing capability.
+    let image = http_client()
+        .post(format!("{base}/v1/images/generations"))
+        .bearer_auth(&key)
+        .header("x-cortex-token-auth", "cortex-cli")
+        .json(&serde_json::json!({"prompt": "a red bicycle"}))
+        .send()
+        .await
+        .expect("image");
+    assert_eq!(image.status(), StatusCode::NOT_IMPLEMENTED);
+    let error: Value = image.json().await.expect("image json");
+    assert_eq!(
+        error["error"]["message"],
+        "this server has no image or video generation model"
+    );
+    let mut voice = format!("ws://{}/v1/stt", server.addr)
+        .into_client_request()
+        .expect("request");
+    voice.headers_mut().insert(
+        "authorization",
+        format!("Bearer {key}").parse().expect("auth"),
+    );
+    let (mut voice, _) = tokio_tungstenite::connect_async(voice)
+        .await
+        .expect("dictation socket");
+    let event = tokio::time::timeout(Duration::from_secs(5), voice.next())
+        .await
+        .expect("timeout")
+        .expect("closed")
+        .expect("event");
+    let event: Value = serde_json::from_str(event.to_text().expect("text")).expect("event json");
+    assert_eq!(event["type"], "error");
+    assert_eq!(event["message"], "this server has no speech-to-text model");
 
     // The client marks every request for this host, so a marked key still authenticates, inference
     // included; unknown or missing keys fail.

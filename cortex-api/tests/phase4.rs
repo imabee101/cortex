@@ -345,7 +345,8 @@ async fn phase4_inventory_routes() {
         .await
         .expect("tokens json");
     assert_eq!(tokens["token_ids"].as_array().expect("ids").len(), 3);
-    // No image, video or speech model: each call gets an answer the client shows as it is.
+    // No image, video or speech generation model: each call is answered with that fact in the shape the
+    // client reports, inside the 200 characters the image tools keep.
     for (method, path) in [
         (reqwest::Method::POST, "/v1/images/generations"),
         (reqwest::Method::POST, "/v1/images/edits"),
@@ -369,19 +370,36 @@ async fn phase4_inventory_routes() {
         assert_eq!(media.status(), 501, "{path}");
         let body = media.text().await.expect("media body");
         let shown: String = body.chars().take(200).collect();
-        assert!(
-            shown.contains("no image or video model") && shown.contains("Do not retry"),
-            "{shown}"
+        let error: Value = serde_json::from_str(&shown).expect("whole error within 200 characters");
+        assert_eq!(
+            error["error"]["message"],
+            "this server has no image or video generation model"
         );
     }
-    let mut voice = ws(&base, "/v1/stt", &access).await;
+    let anonymous_voice = format!("ws://{}/v1/stt", base.trim_start_matches("http://"))
+        .into_client_request()
+        .expect("request");
+    match connect_async(anonymous_voice).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 401);
+        }
+        other => panic!("anonymous dictation was accepted: {:?}", other.map(|_| ())),
+    }
+    let mut voice = stt(&base, &access).await;
     let event: Value = serde_json::from_str(&next_text(&mut voice).await).expect("stt event");
-    assert_eq!(event["type"], "error");
+    assert_eq!(
+        event,
+        json!({"type": "error", "message": "this server has no speech-to-text model"})
+    );
+    let closing = tokio::time::timeout(Duration::from_secs(5), voice.next())
+        .await
+        .expect("timeout");
     assert!(
-        event["message"]
-            .as_str()
-            .expect("message")
-            .contains("no speech model")
+        matches!(
+            closing,
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None
+        ),
+        "{closing:?}"
     );
 
     let models: Value = http
@@ -947,6 +965,26 @@ async fn ws(
     request
         .headers_mut()
         .insert("x-cortex-token-auth", "cortex-cli".parse().expect("header"));
+    let (socket, _) = connect_async(request).await.expect("websocket");
+    socket
+}
+
+/// Opens the dictation socket the way the voice client does: a bearer and its identity headers, without the
+/// `x-cortex-token-auth` marker the other requests carry.
+async fn stt(
+    base: &str,
+    bearer: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let url = format!("ws://{}/v1/stt", base.trim_start_matches("http://"));
+    let mut request = url.into_client_request().expect("request");
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {bearer}").parse().expect("auth"),
+    );
+    request.headers_mut().insert(
+        "x-cortex-client-identifier",
+        "cortex-cli".parse().expect("header"),
+    );
     let (socket, _) = connect_async(request).await.expect("websocket");
     socket
 }
