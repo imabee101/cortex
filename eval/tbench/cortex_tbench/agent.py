@@ -3,8 +3,9 @@
 The binary under test is uploaded from the host (`binary=` agent kwarg), so a before/after
 comparison runs two builds that differ only by the change being measured. The client talks to
 https://llm.imabee.com over TLS with the container's trust store; nothing on the client side is
-wrapped or redirected. Auth is a Cortex API key in `CORTEX_API_KEY`, passed only in the run
-command's environment and never written into the container.
+wrapped or redirected. Auth is a Cortex API key in `CORTEX_API_KEY`, the client's own variable. The key goes
+into the container as a file only the agent user can read, so it never appears on a host command line
+(Harbor's `env=` becomes `docker exec -e NAME=value`); the client's commands inherit it, as on any machine.
 """
 
 import json
@@ -25,6 +26,8 @@ _SERVER = "https://llm.imabee.com"
 # container's OS store is the project's supported path (rule 3), and verification stays on.
 _DEFAULT_CA = "/etc/ca-certificates/trust-source/anchors/appsynergy-root-ca.crt"
 _REMOTE_CA = "/usr/local/share/ca-certificates/cortex-server-ca.crt"
+_REMOTE_KEY = "/installed-agent/api-key"
+_WITH_KEY = f'CORTEX_API_KEY="$(cat {_REMOTE_KEY})"'
 _OUTPUT_FILENAME = "cortex-output.ndjson"
 _LOG_FILENAME = "cortex.log"
 # Kills every `cortex` process and all of its descendants, as the harness's own exit does with its background
@@ -102,24 +105,25 @@ class Cortex(BaseInstalledAgent):
             ),
         )
         await self.exec_as_agent(environment, command="cortex --version")
-        await self._check_server(environment)
+        api_key = self._get_env("CORTEX_API_KEY")
+        if not api_key:
+            raise ValueError("CORTEX_API_KEY must be set on the host for the cortex agent")
+        await self._upload_config_text(environment, content=api_key, remote_path=_REMOTE_KEY, filename="api-key")
+        await self._check_server(environment, api_key)
 
-    async def _check_server(self, environment: BaseEnvironment) -> None:
+    async def _check_server(self, environment: BaseEnvironment, api_key: str) -> None:
         """Fail the trial in seconds, not at the agent timeout, when the container cannot reach the server.
 
         `cortex models` exits 0 even when the server is unreachable: it then lists compiled fallback models.
         So the default it reports must be one the server itself lists.
         """
-        api_key = self._get_env("CORTEX_API_KEY")
-        if not api_key:
-            raise ValueError("CORTEX_API_KEY must be set on the host for the cortex agent")
         request = urllib.request.Request(f"{_SERVER}/v1/models", headers={"Authorization": f"Bearer {api_key}"})
         with urllib.request.urlopen(request, timeout=30) as response:
             served = {model["id"] for model in json.load(response)["data"]}
         result = await self.exec_as_agent(
             environment,
-            command="cortex models </dev/null",
-            env={"CORTEX_API_KEY": api_key, "CORTEX_DISABLE_AUTOUPDATER": "1"},
+            command=f"{_WITH_KEY} cortex models </dev/null",
+            env={"CORTEX_DISABLE_AUTOUPDATER": "1"},
         )
         match = re.search(r"^Default model: (\S+)", result.stdout or "", re.MULTILINE)
         default = match.group(1) if match else None
@@ -133,12 +137,10 @@ class Cortex(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        api_key = self._get_env("CORTEX_API_KEY")
-        if not api_key:
-            raise ValueError("CORTEX_API_KEY must be set on the host for the cortex agent")
         agent_dir = EnvironmentPaths.agent_dir.as_posix()
         command = " ".join(
             [
+                _WITH_KEY,
                 "cortex",
                 # `=` keeps an instruction that starts with "-" (pytorch-model-recovery) from parsing as a flag.
                 f"--single={shlex.quote(instruction)}",
@@ -148,7 +150,6 @@ class Cortex(BaseInstalledAgent):
             ]
         )
         env = {
-            "CORTEX_API_KEY": api_key,
             "CORTEX_DISABLE_AUTOUPDATER": "1",
             "CORTEX_LOG_FILE": f"{agent_dir}/{_LOG_FILENAME}",
         }

@@ -23,7 +23,7 @@ The tooling is in [`eval/tbench`](eval/tbench); its working data (Harbor, tasks,
 
 1. `setup.sh` installs Harbor 0.23.0, fetches the tasks (their hash goes to `dataset.sha256`) and fills the uv cache one grader needs.
 2. `build.sh <commit> <version>` builds the client at a commit in Debian 11, as old as the oldest task image.
-3. `baseline.sh <label> <binary> [task ...]` runs the tasks (vision tasks excluded) through the adapter `cortex_tbench`, which uploads the binary and the server's CA into each container and stops the agent, with everything it started, when its time is up. `VERIFIER_UV_CACHE=$CORTEX_TBENCH_HOME/uv-cache/cache` hands that cache to the grader; it is used only for pytorch-model-recovery.
+3. `baseline.sh <label> <binary> [task ...]` runs the tasks (vision tasks excluded) through the adapter `cortex_tbench`, which uploads the binary and the server's CA into each container and stops the agent, with everything it started, when its time is up. `VERIFIER_UV_CACHE=$CORTEX_TBENCH_HOME/uv-cache/cache` uploads that cache (5 GB) into every trial of the run, so it is set only on a run of pytorch-model-recovery alone.
 4. `watch.sh <job dir>` exits with the reason as soon as a trial fails for a cause that is ours, not the model's. Such a trial is rerun.
 
 ## Changing the wording
@@ -40,7 +40,7 @@ A change to the system prompt or a tool description is written and measured on t
 
 **Measuring it with [`eval/replay.py`](eval/replay.py)**
 
-1. **Decision points.** From saved Terminal-Bench sessions, list every point where the model made the targeted decision, wrong and right, as the session directory and the history index before its reply. Set about a third aside before writing the wording.
+1. **Decision points.** From saved Terminal-Bench sessions, list every point where the model made the targeted decision, wrong and right, as the session directory and the index of the reply's first history item. Set about a third aside before writing the wording.
 2. **Controls.** Add points from neighbouring decisions the new text could change, to catch overcorrection.
 3. **Scoring rule.** Write it before replaying, as a mechanical check on the first tool call.
 4. **Replay.** About 20 samples per point for each variant, with no benchmark running. Only the substituted text differs; the request is rebuilt as the client sends it.

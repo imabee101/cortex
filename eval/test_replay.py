@@ -39,10 +39,38 @@ class ChatMessages(unittest.TestCase):
         self.assertEqual(message["model_id"], "m1")
         self.assertEqual(message["tool_calls"][0]["function"]["arguments"], "{}")
 
+    def test_arguments_serde_rejects_are_replaced(self):
+        self.assertEqual(replay.tool_arguments('{"x": NaN}'), "{}")
+
+    def test_messages_from_another_agent_are_refused(self):
+        with self.assertRaises(ValueError):
+            replay.chat_messages([{"type": "user", "content": "hi", "synthetic_reason": "agent_message"}], "S")
+
     def test_images_are_refused(self):
         item = {"type": "user", "content": [{"type": "image", "url": "data:"}]}
         with self.assertRaises(ValueError):
             replay.chat_messages([item], "S")
+
+
+class Pruned(unittest.TestCase):
+    def history(self, users, result):
+        items = [{"type": "system", "content": "S"}, {"type": "user", "content": "go"},
+                 {"type": "assistant", "content": "", "tool_calls": [{"id": "c", "name": "bash", "arguments": "{}"}]},
+                 {"type": "tool_result", "tool_call_id": "c", "content": result}]
+        return items + [{"type": "user", "content": f"r{i}"} for i in range(users)]
+
+    def test_recent_results_are_kept(self):
+        items = self.history(3, "x" * 5000)
+        self.assertEqual(replay.pruned(items), items)
+
+    def test_old_large_results_keep_head_and_tail(self):
+        content = "a" * 1500 + "b" * 2000 + "c" * 1500
+        trimmed = replay.pruned(self.history(4, content))[3]["content"]
+        self.assertEqual(trimmed, "a" * 1500 + "\n\n[\u2026trimmed\u2026]\n\n" + "c" * 1500)
+        self.assertEqual(replay.pruned(self.history(4, "x" * 4000))[3]["content"], "x" * 4000)
+
+    def test_very_old_results_are_cleared(self):
+        self.assertEqual(replay.pruned(self.history(11, "short"))[3]["content"], "[Tool result omitted \u2014 too old]")
 
 
 class Substitute(unittest.TestCase):
@@ -82,6 +110,26 @@ class BuildRequest(unittest.TestCase):
             replay.build_request(self.session, 2, {})
         with self.assertRaises(ValueError):
             replay.build_request(self.session, len(HISTORY), {})
+
+    def test_a_cut_inside_a_reply_or_on_a_tool_result_is_refused(self):
+        for cut in (5, 7):
+            with self.assertRaises(ValueError):
+                replay.build_request(self.session, cut, {})
+
+    def test_trimming_needs_the_token_total_and_applies_past_half_the_window(self):
+        history = [HISTORY[0], HISTORY[1], HISTORY[4], dict(HISTORY[5], content="x" * 5000)]
+        history += [{"type": "user", "content": f"r{i}"} for i in range(4)] + [HISTORY[7]]
+        (self.session / "chat_history.jsonl").write_text("\n".join(json.dumps(i) for i in history) + "\n")
+        with self.assertRaises(ValueError):
+            replay.build_request(self.session, 8, {})
+        kept = replay.build_request(self.session, 8, {}, reported_tokens=500, context_window=1000)
+        self.assertEqual(kept["messages"][3]["content"], "x" * 5000)
+        trimmed = replay.build_request(self.session, 8, {}, reported_tokens=501, context_window=1000)
+        self.assertEqual(len(trimmed["messages"][3]["content"]), 3000 + len(replay.SOFT_TRIM_SEPARATOR))
+
+    def test_a_tool_without_a_description_is_sent_as_saved(self):
+        (self.session / "tool_definitions.json").write_text(json.dumps([{"type": "function", "function": {"name": "bash"}}]))
+        self.assertEqual(replay.build_request(self.session, 6, {})["tools"][0]["function"], {"name": "bash"})
 
     def test_an_unknown_tool_is_refused(self):
         with self.assertRaises(ValueError):
