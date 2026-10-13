@@ -3,6 +3,7 @@
 //! model, so each call is answered in the shape the client already reports: a tool error the model reads
 //! (the client keeps the first 200 characters of the body) and an STT `error` event the dictation UI shows.
 
+use axum::body::Bytes;
 use axum::extract::ws::Message;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::WebSocketUpgrade;
@@ -16,7 +17,8 @@ use crate::auth::AuthUser;
 const NO_MEDIA_MODEL: &str = "This server has no image or video model, so this tool cannot run here. Do not retry this tool.";
 const NO_SPEECH_MODEL: &str = "This server has no speech model, so voice dictation is unavailable.";
 
-pub async fn unavailable(AuthUser(_user): AuthUser) -> Response {
+/// The body is read before answering so a large upload ends in this answer, not a reset connection.
+pub async fn unavailable(AuthUser(_user): AuthUser, _body: Bytes) -> Response {
     (
         StatusCode::NOT_IMPLEMENTED,
         axum::Json(json!({"error": {
