@@ -17,6 +17,28 @@ Decided 2026-10-10. This file records how Cortex measures changes to what the ha
 - **Server levers first.** The per-model levers the harness was built with are listed in [`TUNING.md`](TUNING.md); try them before any client change.
 - **Wording before mechanism.** Fix a defect in the instructions first. Mechanical harness changes (trimming tools, per-turn reminders, new runtime steps) come only after wording has been measured and failed.
 
+## Changing the wording
+
+A change to the system prompt or a tool description is written and measured on the decision it targets before it reaches Terminal-Bench. A single run per task cannot show it: two runs differing only by three sentences disagreed on 7 of 10 previously passing tasks, each time for a reason the traces tie to sampling, not to the sentences.
+
+**Writing it**
+
+- State how the system behaves and what to do, with the reason; put the how where the decision is made (a tool call's how goes in that tool's description).
+- Narrow or replace an existing sentence the change contradicts; never append a caveat to it.
+- Plain tone, matching the surrounding text: no capitals, MUST, CRITICAL or ALWAYS.
+- Leave the model's verification and done-claim rules alone unless they are the change under test.
+- Nothing from a task: no task names, phrasing, files or examples.
+
+**Measuring it with [`eval/replay.py`](eval/replay.py)**
+
+1. **Decision points.** From saved Terminal-Bench sessions, list every point where the model made the targeted decision, wrong and right, as the session directory and the history index before its reply. Set about a third aside before writing the wording.
+2. **Controls.** Add points from neighbouring decisions the new text could change, to catch overcorrection.
+3. **Scoring rule.** Write it before replaying, as a mechanical check on the first tool call.
+4. **Replay.** About 20 samples per point for each variant, with no benchmark running. Only the substituted text differs; the request is rebuilt as the client sends it.
+5. **Keep it only if** the held-out points improve clearly and the controls do not move. Then confirm on Terminal-Bench with repeats on the target tasks and the previous passes.
+
+Replay holds the history before the decision fixed, so it measures that decision alone; effects later in a task show only in the benchmark. Unit tests: `python3 -m unittest discover -s eval`.
+
 ## Changing the harness
 
 The client is the upstream harness renamed, plus one kind of change: compensating for a weakness of the deployed model the way the upstream authors would have, had they shipped that model. Such a change is made only when all of these hold:
