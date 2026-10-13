@@ -109,6 +109,9 @@ class Cortex(BaseInstalledAgent):
         if not api_key:
             raise ValueError("CORTEX_API_KEY must be set on the host for the cortex agent")
         await self._upload_config_text(environment, content=api_key, remote_path=_REMOTE_KEY, filename="api-key")
+        # Harbor makes it private only when the trial names a user; otherwise the agent runs as the image's own.
+        owner = (await self.exec_as_agent(environment, command="echo $(id -u):$(id -g)")).stdout.strip()
+        await self.exec_as_root(environment, command=f"chown {shlex.quote(owner)} {_REMOTE_KEY} && chmod 600 {_REMOTE_KEY}")
         await self._check_server(environment, api_key)
 
     async def _check_server(self, environment: BaseEnvironment, api_key: str) -> None:
