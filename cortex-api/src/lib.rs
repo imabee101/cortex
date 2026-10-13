@@ -48,8 +48,6 @@ pub struct Config {
     pub listen: SocketAddr,
     pub database_url: String,
     pub context_window: u64,
-    /// Share of the context window advertised to the harness, 1 to 100.
-    pub context_percent: u64,
     pub model_id: String,
     /// Wire protocol the harness uses for sampling: chat_completions, responses, or messages.
     pub api_backend: String,
@@ -100,7 +98,6 @@ impl Config {
             listen,
             database_url,
             context_window: 98304,
-            context_percent: 40,
             model_id: "Qwen3.5-9B".to_owned(),
             api_backend: "chat_completions".to_owned(),
             release_version: "0.0.0".to_owned(),

@@ -166,7 +166,7 @@ pub fn model_list(state: &AppState) -> serde_json::Value {
             "id": state.config.model_id,
             "model": state.config.model_id,
             "name": state.config.model_id,
-            "context_window": crate::inference::advertised_context_window(state),
+            "context_window": crate::inference::context_window(state),
             "api_backend": state.config.api_backend,
             "supports_backend_search": crate::search::configured(state),
         }]

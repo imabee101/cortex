@@ -54,7 +54,14 @@ pub async fn responses(
         Err(response) => return response,
     };
     match crate::search::maybe(&state, user, &headers, &body).await {
-        crate::search::Outcome::Answer(response) => response,
+        crate::search::Outcome::Answer(response) => {
+            let window = response
+                .headers()
+                .get(CONTEXT_WINDOW_HEADER)
+                .cloned()
+                .unwrap_or_else(|| reported_window(&state, None));
+            with_window(response, window)
+        }
         crate::search::Outcome::Rewritten(body) => {
             let mut headers = headers;
             headers.remove(CONTENT_ENCODING);
@@ -334,10 +341,32 @@ pub fn context_window(state: &AppState) -> u64 {
     }
 }
 
-/// The window the harness is told about. It counts bytes/4 against this number and never reads the
-/// server's token count, which runs about twice that on code, so the real window is scaled down.
-pub fn advertised_context_window(state: &AppState) -> u64 {
-    (context_window(state).saturating_mul(state.config.context_percent) / 100).max(1)
+pub(crate) const CONTEXT_WINDOW_HEADER: &str = "x-cortex-context-window";
+
+/// The window every upstream inference response reports in `x-cortex-context-window`. A success reports the
+/// real window, which the client adopts when it is larger than its own. On llama-server's overflow error the
+/// client compacts and resubmits only when its token count is over the reported window, and it counts what
+/// was added since the last response at 4 bytes a token, below llama's count for code. So an overflow reports
+/// half the window: under the client's count unless one turn's output was under-counted by half the window.
+/// The client keeps that window until the next success restores the real one.
+pub(crate) fn reported_window(
+    state: &AppState,
+    error_body: Option<&[u8]>,
+) -> axum::http::HeaderValue {
+    let window = context_window(state);
+    let overflow = error_body
+        .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+        .is_some_and(|body| body["error"]["type"] == "exceed_context_size_error");
+    axum::http::HeaderValue::from(if overflow {
+        (window / 2).max(1)
+    } else {
+        window
+    })
+}
+
+fn with_window(mut response: Response, window: axum::http::HeaderValue) -> Response {
+    response.headers_mut().insert(CONTEXT_WINDOW_HEADER, window);
+    response
 }
 
 /// The model's chat template accepts a system message only first, but the harness
@@ -483,12 +512,19 @@ async fn forward(
         .to_owned();
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return passthrough(status, &content_type, retry_after.as_deref(), bytes);
+        let window = reported_window(state, Some(&bytes));
+        return with_window(
+            passthrough(status, &content_type, retry_after.as_deref(), bytes),
+            window,
+        );
     }
     if stream || content_type.contains("text/event-stream") {
         let stream = upstream.bytes_stream();
         let body = Body::from_stream(rewrite_stream(stream, permit, state.loops_aborted.clone()));
-        return sse_response(status, retry_after.as_deref(), body);
+        return with_window(
+            sse_response(status, retry_after.as_deref(), body),
+            reported_window(state, None),
+        );
     }
     let bytes = match upstream.bytes().await {
         Ok(bytes) => bytes,
@@ -497,11 +533,14 @@ async fn forward(
         }
     };
     let rewritten = rewrite_json_bytes(&bytes).unwrap_or_else(|| bytes.to_vec());
-    passthrough(
-        status,
-        "application/json",
-        retry_after.as_deref(),
-        rewritten,
+    with_window(
+        passthrough(
+            status,
+            "application/json",
+            retry_after.as_deref(),
+            rewritten,
+        ),
+        reported_window(state, None),
     )
 }
 

@@ -492,7 +492,7 @@ async fn phase2_contract_matches_proxy_types() {
         .await
         .expect("models json");
     assert_eq!(models["data"][0]["model"], "Qwen3.5-9B");
-    assert_eq!(models["data"][0]["context_window"], 39321);
+    assert_eq!(models["data"][0]["context_window"], 98304);
     assert_eq!(models["data"][0]["api_backend"], "chat_completions");
     assert_eq!(
         models["data"][0]["supports_backend_search"], false,

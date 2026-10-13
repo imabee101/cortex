@@ -411,7 +411,7 @@ async fn phase4_inventory_routes() {
         .json()
         .await
         .expect("models json");
-    assert_eq!(models["data"][0]["context_window"], 1638);
+    assert_eq!(models["data"][0]["context_window"], 4096);
     assert_eq!(models["data"][0]["supports_backend_search"], true);
 
     let missing = http
