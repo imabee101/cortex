@@ -334,10 +334,14 @@ pub fn context_window(state: &AppState) -> u64 {
     }
 }
 
-/// The window the harness is told about. It counts bytes/4 against this number and never reads the
-/// server's token count, which runs about twice that on code, so the real window is scaled down.
-pub fn advertised_context_window(state: &AppState) -> u64 {
-    (context_window(state).saturating_mul(state.config.context_percent) / 100).max(1)
+/// Every inference response carries the window, as the client expects: when a request overflows, it compacts
+/// and resubmits only if the failed response reports the model's context window (`x-cortex-context-window`).
+fn with_context_window(mut response: Response, window: u64) -> Response {
+    response.headers_mut().insert(
+        "x-cortex-context-window",
+        axum::http::HeaderValue::from(window),
+    );
+    response
 }
 
 /// The model's chat template accepts a system message only first, but the harness
@@ -461,6 +465,7 @@ async fn forward(
         }
     };
     let status = upstream.status();
+    let window = context_window(state);
     if status.is_server_error() {
         state.llama_breaker.failure();
     } else {
@@ -483,12 +488,15 @@ async fn forward(
         .to_owned();
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return passthrough(status, &content_type, retry_after.as_deref(), bytes);
+        return with_context_window(
+            passthrough(status, &content_type, retry_after.as_deref(), bytes),
+            window,
+        );
     }
     if stream || content_type.contains("text/event-stream") {
         let stream = upstream.bytes_stream();
         let body = Body::from_stream(rewrite_stream(stream, permit, state.loops_aborted.clone()));
-        return sse_response(status, retry_after.as_deref(), body);
+        return with_context_window(sse_response(status, retry_after.as_deref(), body), window);
     }
     let bytes = match upstream.bytes().await {
         Ok(bytes) => bytes,
@@ -497,11 +505,14 @@ async fn forward(
         }
     };
     let rewritten = rewrite_json_bytes(&bytes).unwrap_or_else(|| bytes.to_vec());
-    passthrough(
-        status,
-        "application/json",
-        retry_after.as_deref(),
-        rewritten,
+    with_context_window(
+        passthrough(
+            status,
+            "application/json",
+            retry_after.as_deref(),
+            rewritten,
+        ),
+        window,
     )
 }
 

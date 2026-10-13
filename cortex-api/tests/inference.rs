@@ -107,7 +107,7 @@ async fn inference_normalizes_llama_shapes() {
         .json()
         .await
         .expect("models json");
-    assert_eq!(models["data"][0]["context_window"], 1638);
+    assert_eq!(models["data"][0]["context_window"], 4096);
 
     let chat = http
         .post(format!("{base}/v1/chat/completions"))
@@ -117,12 +117,26 @@ async fn inference_normalizes_llama_shapes() {
         .await
         .expect("chat");
     assert_eq!(chat.status(), 200);
+    assert_eq!(chat.headers()["x-cortex-context-window"], "4096");
     let chat_body = chat.text().await.expect("chat text");
     assert!(
         chat_body.contains("\\\"cmd\\\":\\\"ls\\\"")
             || chat_body.contains("\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"")
     );
     assert!(chat_body.contains("[DONE]"));
+
+    // An overflow reaches the client as llama-server sent it, with the window the client compacts against.
+    let overflow = http
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(&json!({"model": "overflow", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .expect("overflow");
+    assert_eq!(overflow.status(), 400);
+    assert_eq!(overflow.headers()["x-cortex-context-window"], "4096");
+    let overflow: Value = overflow.json().await.expect("overflow json");
+    assert_eq!(overflow["error"]["type"], "exceed_context_size_error");
 
     // No output limit is added: a reply ends when the model stops or the context is full, which is
     // what the harness assumes of a length finish. A limit the client sets itself is passed on.
@@ -363,6 +377,14 @@ async fn chat(request: Request) -> axum::response::Response {
         payload["max_tokens"].as_u64().unwrap_or(0),
         std::sync::atomic::Ordering::SeqCst,
     );
+    if payload["model"] == "overflow" {
+        // llama-server's own answer to a prompt longer than its context.
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code": 400, "message": "request (5000 tokens) exceeds the available context size (4096 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 5000, "n_ctx": 4096}})),
+        )
+            .into_response();
+    }
     if payload["model"] == "forced" {
         *LAST_TOOLING.lock().expect("lock") =
             json!({"tool_choice": payload["tool_choice"], "tools": payload["tools"]});

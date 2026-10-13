@@ -15,15 +15,6 @@ struct Args {
     database_url: String,
     #[arg(long, env = "CORTEX_API_CONTEXT_WINDOW", default_value_t = 98304)]
     context_window: u64,
-    /// Share of the context window `/v1/models` reports. The harness sizes its conversation at
-    /// bytes/4 and never reads the server's token count, which runs about twice that on code.
-    #[arg(
-        long,
-        env = "CORTEX_API_CONTEXT_PERCENT",
-        default_value_t = 40,
-        value_parser = clap::value_parser!(u64).range(1..=100)
-    )]
-    context_percent: u64,
     #[arg(long, env = "CORTEX_API_MODEL", default_value = "Qwen3.5-9B")]
     model: String,
     #[arg(
@@ -112,7 +103,6 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut config = cortex_api::Config::new(args.listen, args.database_url);
     config.context_window = args.context_window;
-    config.context_percent = args.context_percent;
     config.model_id = args.model;
     config.api_backend = args.api_backend;
     config.release_version = args.release_version;

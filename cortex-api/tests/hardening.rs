@@ -688,7 +688,6 @@ async fn context_window_follows_llama_server_once_it_is_up() {
     let api = start("cortex_api_hard_props", |config| {
         config.llama_url = Some(llama);
         config.context_window = 777;
-        config.context_percent = 100;
         config.props_refresh_secs = 1;
     })
     .await;
