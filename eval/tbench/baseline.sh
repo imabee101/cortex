@@ -8,13 +8,13 @@
 # one is graded while the current agent works.
 # Tasks that need the model to see an image or video are excluded: the served model has no vision.
 # VERIFIER_UV_CACHE=<dir> hands the grader a pre-filled uv cache (see the adapter); unset for normal runs.
-# The key is read from the host environment by the adapter; it is never passed on the command line.
+# The benchmark account's credentials are read from the host environment by the adapter, never put on a command line.
 set -euo pipefail
 export PYTHONPATH=$(cd "$(dirname "$0")" && pwd)
-cd "${CORTEX_TBENCH_HOME:-$HOME/.cache/cortex-tbench}"
+cd "${CORTEX_TBENCH_HOME:-$HOME/data/cortex-tbench}"
 label=${1:?label} binary=${2:?cortex binary}
 shift 2
-source ~/.config/cortex-test/tbench.env
+source ~/.config/cortex-test/credentials.sh
 
 vision=(chess-best-move code-from-image extract-moves-from-video path-tracing)
 tasks=("$@")

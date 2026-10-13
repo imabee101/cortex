@@ -1,8 +1,8 @@
 #!/bin/bash
-# Prepares the Terminal-Bench working directory ($CORTEX_TBENCH_HOME, default ~/.cache/cortex-tbench): Harbor, the task
+# Prepares the Terminal-Bench working directory ($CORTEX_TBENCH_HOME, default ~/data/cortex-tbench): Harbor, the task
 # set, and the pre-filled uv cache that `baseline.sh` can hand a grader (VERIFIER_UV_CACHE). Safe to rerun.
 set -euo pipefail
-work=${CORTEX_TBENCH_HOME:-$HOME/.cache/cortex-tbench}
+work=${CORTEX_TBENCH_HOME:-$HOME/data/cortex-tbench}
 mkdir -p "$work" && cd "$work"
 
 if [ ! -x .venv/bin/harbor ]; then

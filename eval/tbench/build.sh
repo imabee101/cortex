@@ -4,7 +4,7 @@
 # Capped at 12 GB like every build on this host. Usage: build.sh <commit> <version> [suffix]
 set -euo pipefail
 commit=${1:?commit} version=${2:?version} suffix=${3:-}
-work=${CORTEX_TBENCH_HOME:-$HOME/.cache/cortex-tbench}
+work=${CORTEX_TBENCH_HOME:-$HOME/data/cortex-tbench}
 repo=$(git rev-parse --show-toplevel)
 common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
 name=cortex-$version${suffix:+-$suffix}-portable

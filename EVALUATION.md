@@ -19,7 +19,7 @@ Decided 2026-10-10. This file records how Cortex measures changes to what the ha
 
 ## Running Terminal-Bench
 
-The tooling is in [`eval/tbench`](eval/tbench); its working data (Harbor, tasks, binaries, jobs) lives in `$CORTEX_TBENCH_HOME`, default `~/.cache/cortex-tbench`, and the API key in `~/.config/cortex-test/tbench.env`.
+The tooling is in [`eval/tbench`](eval/tbench); its working data (Harbor, tasks, binaries, jobs) lives in `$CORTEX_TBENCH_HOME`, default `~/data/cortex-tbench`, and the benchmark account (`CX_EMAIL`, `CX_PASSWORD`) in `~/.config/cortex-test/credentials.sh`; each trial signs in with it as a user does.
 
 1. `setup.sh` installs Harbor 0.23.0, fetches the tasks (their hash goes to `dataset.sha256`) and fills the uv cache one grader needs.
 2. `build.sh <commit> <version>` builds the client at a commit in Debian 11, as old as the oldest task image.

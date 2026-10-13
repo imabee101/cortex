@@ -34,7 +34,7 @@ msg = (e.get("exception_message") or "").replace("\n", " ")
 # Exit 137 is a SIGKILL: a container OOM shows up in the slice kill count below; otherwise the model killed it.
 # The agent must have started (its first output line lists its tools); a usage error before that is ours.
 started = '"type":"available_commands"' in msg
-agent_exit = re.match(r'Command failed \(exit \d+\): mkdir -p /logs/agent && (CORTEX_API_KEY="\$\(cat [^)]*\)" )?cortex', msg) is not None and started and "llm.imabee.com" not in msg
+agent_exit = re.match(r"Command failed \(exit \d+\): mkdir -p /logs/agent && cortex", msg) is not None and started and "llm.imabee.com" not in msg
 if kind in ("", "AgentTimeoutError") or (kind.endswith("Error") and agent_exit):
     sys.exit(0)
 print(f"{kind}: {msg[:300]}")
