@@ -40,6 +40,8 @@ A change to the system prompt or a tool description is written and measured on t
 
 **Measuring it with [`eval/replay.py`](eval/replay.py)**
 
+Replay sends requests straight to the server with an API key in `CORTEX_API_KEY` (`~/.config/cortex-test/tbench.env`).
+
 1. **Decision points.** From saved Terminal-Bench sessions, list every point where the model made the targeted decision, wrong and right, as the session directory and the index of the reply's first history item. Set about a third aside before writing the wording.
 2. **Controls.** Add points from neighbouring decisions the new text could change, to catch overcorrection.
 3. **Scoring rule.** Write it before replaying, as a mechanical check on the first tool call.

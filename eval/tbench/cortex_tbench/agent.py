@@ -76,7 +76,8 @@ _browser = {"cookie": None}
 _browser_lock = threading.Lock()
 
 
-def _post_form(path: str, fields: dict, cookie: str | None = None) -> tuple[int, dict]:
+def _post_form(path: str, fields: dict, cookie: str | None = None) -> tuple[int, str]:
+    """Returns the status and the Set-Cookie values joined."""
     request = urllib.request.Request(
         f"{_SERVER}{path}", data=urllib.parse.urlencode(fields).encode(), method="POST"
     )
@@ -84,16 +85,17 @@ def _post_form(path: str, fields: dict, cookie: str | None = None) -> tuple[int,
         request.add_header("Cookie", f"session={cookie}")
     try:
         with _OPENER.open(request, timeout=30) as response:
-            return response.status, dict(response.headers)
+            return response.status, ", ".join(response.headers.get_all("Set-Cookie") or [])
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers)
+        with error:
+            return error.code, ", ".join(error.headers.get_all("Set-Cookie") or [])
 
 
 def _browser_sign_in(email: str, password: str, user_code: str) -> str:
-    status, headers = _post_form(
+    status, cookies = _post_form(
         "/login", {"email": email, "password": password, "next": f"/device?user_code={user_code}"}
     )
-    match = re.search(r"(?:^|[;,]\s*)session=([^;]+)", headers.get("Set-Cookie", ""))
+    match = re.search(r"(?:^|[;,]\s*)session=([^;]+)", cookies)
     if status != 303 or not match:
         raise RuntimeError(f"benchmark account sign-in failed: HTTP {status}")
     return match.group(1)
@@ -190,7 +192,9 @@ class Cortex(BaseInstalledAgent):
         if not email or not password:
             raise ValueError("CX_EMAIL and CX_PASSWORD must be set on the host for the cortex agent")
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CORTEX_", "CX_"))}
-        env.update({"CORTEX_HOME": str(login_home), "CORTEX_DISABLE_AUTOUPDATER": "1"})
+        # The device flow opens the verification page in a browser; "true" stands in for one, so no trial opens a
+        # tab on the host's desktop. The code is approved over HTTP below.
+        env.update({"CORTEX_HOME": str(login_home), "CORTEX_DISABLE_AUTOUPDATER": "1", "BROWSER": "true"})
         login = await asyncio.create_subprocess_exec(
             str(self._binary), "login", "--device-auth",
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=env,
