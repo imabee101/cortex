@@ -17,6 +17,15 @@ Decided 2026-10-10. This file records how Cortex measures changes to what the ha
 - **Server levers first.** The per-model levers the harness was built with are listed in [`TUNING.md`](TUNING.md); try them before any client change.
 - **Wording before mechanism.** Fix a defect in the instructions first. Mechanical harness changes (trimming tools, per-turn reminders, new runtime steps) come only after wording has been measured and failed.
 
+## Running Terminal-Bench
+
+The tooling is in [`eval/tbench`](eval/tbench); its working data (Harbor, tasks, binaries, jobs) lives in `$CORTEX_TBENCH_HOME`, default `~/.cache/cortex-tbench`, and the API key in `~/.config/cortex-test/tbench.env`.
+
+1. `setup.sh` installs Harbor 0.23.0, fetches the tasks (their hash goes to `dataset.sha256`) and fills the uv cache one grader needs.
+2. `build.sh <commit> <version>` builds the client at a commit in Debian 11, as old as the oldest task image.
+3. `baseline.sh <label> <binary> [task ...]` runs the tasks (vision tasks excluded) through the adapter `cortex_tbench`, which uploads the binary and the server's CA into each container and stops the agent, with everything it started, when its time is up. `VERIFIER_UV_CACHE=$CORTEX_TBENCH_HOME/uv-cache/cache` hands that cache to the grader; it is used only for pytorch-model-recovery.
+4. `watch.sh <job dir>` exits with the reason as soon as a trial fails for a cause that is ours, not the model's. Such a trial is rerun.
+
 ## Changing the wording
 
 A change to the system prompt or a tool description is written and measured on the decision it targets before it reaches Terminal-Bench. A single run per task cannot show it: two runs differing only by three sentences disagreed on 7 of 10 previously passing tasks, each time for a reason the traces tie to sampling, not to the sentences.
