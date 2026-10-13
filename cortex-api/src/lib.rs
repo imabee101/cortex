@@ -5,6 +5,7 @@ mod db;
 mod inference;
 pub mod jwt;
 mod limits;
+mod media;
 mod oidc;
 mod pages;
 mod product;
@@ -349,6 +350,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/responses", post(inference::responses))
         .route("/v1/messages", post(inference::messages))
         .route("/v1/embeddings", post(inference::embeddings))
+        .route("/v1/images/generations", post(media::unavailable))
+        .route("/v1/images/edits", post(media::unavailable))
+        .route("/v1/videos/generations", post(media::unavailable))
+        .route("/v1/videos/{id}", get(media::unavailable))
+        .route("/v1/stt", get(media::stt))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
     let product = Router::new()
         .route("/sessions", get(product::list_sessions))

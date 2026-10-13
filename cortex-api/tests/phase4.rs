@@ -345,21 +345,44 @@ async fn phase4_inventory_routes() {
         .await
         .expect("tokens json");
     assert_eq!(tokens["token_ids"].as_array().expect("ids").len(), 3);
-    let images = http
-        .post(format!("{base}/v1/images/generations"))
-        .bearer_auth(&access)
-        .json(&json!({}))
-        .send()
-        .await
-        .expect("images");
-    assert_eq!(images.status(), 404);
-    let voice = http
-        .get(format!("{base}/v1/stt"))
-        .bearer_auth(&access)
-        .send()
-        .await
-        .expect("voice");
-    assert_eq!(voice.status(), 404);
+    // No image, video or speech model: each call gets an answer the client shows as it is.
+    for (method, path) in [
+        (reqwest::Method::POST, "/v1/images/generations"),
+        (reqwest::Method::POST, "/v1/images/edits"),
+        (reqwest::Method::POST, "/v1/videos/generations"),
+        (reqwest::Method::GET, "/v1/videos/req-1"),
+    ] {
+        let anonymous = http
+            .request(method.clone(), format!("{base}{path}"))
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("media");
+        assert_eq!(anonymous.status(), 401, "{path}");
+        let media = http
+            .request(method, format!("{base}{path}"))
+            .bearer_auth(&access)
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("media");
+        assert_eq!(media.status(), 501, "{path}");
+        let body = media.text().await.expect("media body");
+        let shown: String = body.chars().take(200).collect();
+        assert!(
+            shown.contains("no image or video model") && shown.contains("Do not retry"),
+            "{shown}"
+        );
+    }
+    let mut voice = ws(&base, "/v1/stt", &access).await;
+    let event: Value = serde_json::from_str(&next_text(&mut voice).await).expect("stt event");
+    assert_eq!(event["type"], "error");
+    assert!(
+        event["message"]
+            .as_str()
+            .expect("message")
+            .contains("no speech model")
+    );
 
     let models: Value = http
         .get(format!("{base}/v1/models"))
