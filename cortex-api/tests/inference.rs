@@ -125,7 +125,8 @@ async fn inference_normalizes_llama_shapes() {
     );
     assert!(chat_body.contains("[DONE]"));
 
-    // An overflow reaches the client as llama-server sent it, with the window the client compacts against.
+    // An overflow reaches the client as llama-server sent it, reporting half the window so that the client's
+    // own count, which runs below llama's, is over it and the client compacts and resubmits.
     let overflow = http
         .post(format!("{base}/v1/chat/completions"))
         .bearer_auth(access)
@@ -134,7 +135,7 @@ async fn inference_normalizes_llama_shapes() {
         .await
         .expect("overflow");
     assert_eq!(overflow.status(), 400);
-    assert_eq!(overflow.headers()["x-cortex-context-window"], "4096");
+    assert_eq!(overflow.headers()["x-cortex-context-window"], "2048");
     let overflow: Value = overflow.json().await.expect("overflow json");
     assert_eq!(overflow["error"]["type"], "exceed_context_size_error");
 

@@ -48,7 +48,6 @@ pub struct Config {
     pub listen: SocketAddr,
     pub database_url: String,
     pub context_window: u64,
-    /// Share of the context window advertised to the harness, 1 to 100.
     pub model_id: String,
     /// Wire protocol the harness uses for sampling: chat_completions, responses, or messages.
     pub api_backend: String,

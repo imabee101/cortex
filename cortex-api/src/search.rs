@@ -351,7 +351,12 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
         .map(str::to_owned);
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return Err(passthrough(status, retry_after.as_deref(), bytes));
+        let window = crate::inference::reported_window(state, Some(&bytes));
+        let mut response = passthrough(status, retry_after.as_deref(), bytes);
+        response
+            .headers_mut()
+            .insert(crate::inference::CONTEXT_WINDOW_HEADER, window);
+        return Err(response);
     }
     upstream
         .json()

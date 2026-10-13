@@ -54,7 +54,14 @@ pub async fn responses(
         Err(response) => return response,
     };
     match crate::search::maybe(&state, user, &headers, &body).await {
-        crate::search::Outcome::Answer(response) => response,
+        crate::search::Outcome::Answer(response) => {
+            let window = response
+                .headers()
+                .get(CONTEXT_WINDOW_HEADER)
+                .cloned()
+                .unwrap_or_else(|| reported_window(&state, None));
+            with_window(response, window)
+        }
         crate::search::Outcome::Rewritten(body) => {
             let mut headers = headers;
             headers.remove(CONTENT_ENCODING);
@@ -334,13 +341,31 @@ pub fn context_window(state: &AppState) -> u64 {
     }
 }
 
-/// Every inference response carries the window, as the client expects: when a request overflows, it compacts
-/// and resubmits only if the failed response reports the model's context window (`x-cortex-context-window`).
-fn with_context_window(mut response: Response, window: u64) -> Response {
-    response.headers_mut().insert(
-        "x-cortex-context-window",
-        axum::http::HeaderValue::from(window),
-    );
+pub(crate) const CONTEXT_WINDOW_HEADER: &str = "x-cortex-context-window";
+
+/// The window every upstream inference response reports in `x-cortex-context-window`. A success reports the
+/// real window, which the client adopts when it is larger than its own. On llama-server's overflow error the
+/// client compacts and resubmits only when its token count is over the reported window, and it counts what
+/// was added since the last response at 4 bytes a token, below llama's count for code. So an overflow reports
+/// half the window: under the client's count unless one turn's output was under-counted by half the window.
+/// The client keeps that window until the next success restores the real one.
+pub(crate) fn reported_window(
+    state: &AppState,
+    error_body: Option<&[u8]>,
+) -> axum::http::HeaderValue {
+    let window = context_window(state);
+    let overflow = error_body
+        .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+        .is_some_and(|body| body["error"]["type"] == "exceed_context_size_error");
+    axum::http::HeaderValue::from(if overflow {
+        (window / 2).max(1)
+    } else {
+        window
+    })
+}
+
+fn with_window(mut response: Response, window: axum::http::HeaderValue) -> Response {
+    response.headers_mut().insert(CONTEXT_WINDOW_HEADER, window);
     response
 }
 
@@ -465,7 +490,6 @@ async fn forward(
         }
     };
     let status = upstream.status();
-    let window = context_window(state);
     if status.is_server_error() {
         state.llama_breaker.failure();
     } else {
@@ -488,7 +512,8 @@ async fn forward(
         .to_owned();
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return with_context_window(
+        let window = reported_window(state, Some(&bytes));
+        return with_window(
             passthrough(status, &content_type, retry_after.as_deref(), bytes),
             window,
         );
@@ -496,7 +521,10 @@ async fn forward(
     if stream || content_type.contains("text/event-stream") {
         let stream = upstream.bytes_stream();
         let body = Body::from_stream(rewrite_stream(stream, permit, state.loops_aborted.clone()));
-        return with_context_window(sse_response(status, retry_after.as_deref(), body), window);
+        return with_window(
+            sse_response(status, retry_after.as_deref(), body),
+            reported_window(state, None),
+        );
     }
     let bytes = match upstream.bytes().await {
         Ok(bytes) => bytes,
@@ -505,14 +533,14 @@ async fn forward(
         }
     };
     let rewritten = rewrite_json_bytes(&bytes).unwrap_or_else(|| bytes.to_vec());
-    with_context_window(
+    with_window(
         passthrough(
             status,
             "application/json",
             retry_after.as_deref(),
             rewritten,
         ),
-        window,
+        reported_window(state, None),
     )
 }
 
