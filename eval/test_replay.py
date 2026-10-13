@@ -33,6 +33,12 @@ class ChatMessages(unittest.TestCase):
         messages = replay.chat_messages(HISTORY[:3] + [HISTORY[5]], "S")
         self.assertNotIn("reasoning_content", messages[-1])
 
+    def test_assistant_messages_carry_the_model_and_valid_arguments(self):
+        broken = dict(HISTORY[4], tool_calls=[{"id": "c1", "name": "bash", "arguments": "{\"command\":"}])
+        message = replay.chat_messages([HISTORY[0], broken], "S")[1]
+        self.assertEqual(message["model_id"], "m1")
+        self.assertEqual(message["tool_calls"][0]["function"]["arguments"], "{}")
+
     def test_images_are_refused(self):
         item = {"type": "user", "content": [{"type": "image", "url": "data:"}]}
         with self.assertRaises(ValueError):

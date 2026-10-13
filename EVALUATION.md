@@ -37,7 +37,7 @@ A change to the system prompt or a tool description is written and measured on t
 4. **Replay.** About 20 samples per point for each variant, with no benchmark running. Only the substituted text differs; the request is rebuilt as the client sends it.
 5. **Keep it only if** the held-out points improve clearly and the controls do not move. Then confirm on Terminal-Bench with repeats on the target tasks and the previous passes.
 
-Replay holds the history before the decision fixed, so it measures that decision alone; effects later in a task show only in the benchmark. Unit tests: `python3 -m unittest discover -s eval`.
+Replay holds the history before the decision fixed, so it measures that decision alone; effects later in a task show only in the benchmark. Take points only from sessions run with the unchanged prompt, whose tool set never changed (a session saves only its last tool definitions) and that set no sampling overrides (replay sends none); cut indices count the history as saved, after any compaction. Unit tests: `python3 -m unittest discover -s eval`.
 
 ## Changing the harness
 

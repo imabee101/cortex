@@ -40,6 +40,15 @@ def reasoning_text(item):
     return "\n".join(parts)
 
 
+def tool_arguments(arguments):
+    """The client replaces arguments that are not JSON with `{}` (`sanitize_tool_arguments`)."""
+    try:
+        json.loads(arguments)
+    except ValueError:
+        return "{}"
+    return arguments
+
+
 def chat_messages(items, system):
     """Chat Completions messages for history items, with the system prompt replaced by `system`."""
     out, pending = [], []
@@ -64,9 +73,11 @@ def chat_messages(items, system):
             calls = item.get("tool_calls") or []
             if calls:
                 message["tool_calls"] = [
-                    {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
+                    {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": tool_arguments(c["arguments"])}}
                     for c in calls
                 ]
+            if item.get("model_id"):
+                message["model_id"] = item["model_id"]
             if pending:
                 message["reasoning_content"] = "\n".join(pending)
         elif kind == "tool_result":
