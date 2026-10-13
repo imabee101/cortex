@@ -1,7 +1,7 @@
-//! The harness calls image, video and voice endpoints whenever its tools or dictation are used, and a client
-//! signed in with an API key never reads the settings that switch them off. This server has only a language
-//! model, so each call is answered in the shape the client already reports: a tool error the model reads
-//! (the client keeps the first 200 characters of the body) and an STT `error` event the dictation UI shows.
+//! The harness calls image, video and voice endpoints whenever its tools or dictation are used. Settings switch
+//! them off for a signed-in session, but a client using an API key never fetches settings, so its calls arrive
+//! here. This server has only a language model, so each call is answered with that fact, in the shape the client
+//! already reports: an error body the tool hands the model, and an STT `error` event the dictation UI shows.
 
 use axum::body::Bytes;
 use axum::extract::ws::Message;
@@ -14,8 +14,8 @@ use serde_json::json;
 
 use crate::auth::AuthUser;
 
-const NO_MEDIA_MODEL: &str = "This server has no image or video model, so this tool cannot run here. Do not retry this tool.";
-const NO_SPEECH_MODEL: &str = "This server has no speech model, so voice dictation is unavailable.";
+const NO_MEDIA_MODEL: &str = "this server has no image or video generation model";
+const NO_SPEECH_MODEL: &str = "this server has no speech-to-text model";
 
 /// The body is read before answering so a large upload ends in this answer, not a reset connection.
 pub async fn unavailable(AuthUser(_user): AuthUser, _body: Bytes) -> Response {
