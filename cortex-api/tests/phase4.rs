@@ -969,7 +969,7 @@ async fn ws(
     socket
 }
 
-/// Opens the dictation socket the way the voice client does: a bearer and its identity headers, without the
+/// Opens the dictation socket the way the voice client does: a bearer and its client identifier, without the
 /// `x-cortex-token-auth` marker the other requests carry.
 async fn stt(
     base: &str,
@@ -983,7 +983,7 @@ async fn stt(
     );
     request.headers_mut().insert(
         "x-cortex-client-identifier",
-        "cortex-cli".parse().expect("header"),
+        "cortex-shell".parse().expect("header"),
     );
     let (socket, _) = connect_async(request).await.expect("websocket");
     socket
