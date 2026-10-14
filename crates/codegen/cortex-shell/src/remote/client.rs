@@ -822,6 +822,25 @@ pub(crate) fn parse_remote_model_value(
                 }
             })
             .unwrap_or_default(),
+        objective_reminder: get_object(obj, "objectiveReminder")
+            .or_else(|| get_object(obj, "objective_reminder"))
+            .or_else(|| meta.and_then(|m| get_object(m, "objectiveReminder")))
+            .and_then(|v| {
+                match serde_json::from_value::<
+                    crate::agent::config::ObjectiveReminderPerModelConfig,
+                >(v.clone())
+                {
+                    Ok(cfg) => Some(cfg),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to deserialize objective_reminder block from remote model; falling back to default"
+                        );
+                        None
+                    }
+                }
+            })
+            .unwrap_or_default(),
     })
 }
 

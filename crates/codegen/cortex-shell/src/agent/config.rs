@@ -247,7 +247,8 @@ impl TraceUploadEndpoints for EndpointsConfig {
 pub use cortex_config::AllowlistPin;
 pub use cortex_config_types::{
     BoolFlag, ConfigSource, FEATURES, Feature, FeatureConfigLayer, FeatureConfigLayers,
-    FeatureLayerValue, FeatureSources, LazinessDetectorPerModelConfig, Resolved,
+    FeatureLayerValue, FeatureSources, LazinessDetectorPerModelConfig,
+    ObjectiveReminderPerModelConfig, Resolved,
 };
 /// Resolution result for a `/goal` role's model selection.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3259,6 +3260,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 stream_tool_calls: None,
                 reasoning_summary: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
+                objective_reminder: ObjectiveReminderPerModelConfig::default(),
             };
             (key, config)
         })
@@ -3396,6 +3398,10 @@ pub struct ModelEntryConfig {
     /// Defaults to the all-disabled state via `#[serde(default)]`.
     #[serde(default, skip_serializing_if = "is_default_laziness_detector")]
     pub laziness_detector: LazinessDetectorPerModelConfig,
+    /// Per-model objective reminder configuration.
+    /// Defaults to the disabled state via `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "is_default_objective_reminder")]
+    pub objective_reminder: ObjectiveReminderPerModelConfig,
 }
 impl Default for ModelEntryConfig {
     /// Matches the per-field serde defaults so construction sites (tests especially) can use `..Default::default()`
@@ -3444,6 +3450,7 @@ impl Default for ModelEntryConfig {
             stream_tool_calls: None,
             reasoning_summary: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
+            objective_reminder: ObjectiveReminderPerModelConfig::default(),
         }
     }
 }
@@ -3452,6 +3459,9 @@ impl Default for ModelEntryConfig {
 /// Otherwise `skip_serializing_if` starts emitting `[laziness_detector]` blocks for every model in `config.toml`.
 fn is_default_laziness_detector(cfg: &LazinessDetectorPerModelConfig) -> bool {
     cfg == &LazinessDetectorPerModelConfig::default()
+}
+fn is_default_objective_reminder(cfg: &ObjectiveReminderPerModelConfig) -> bool {
+    cfg == &ObjectiveReminderPerModelConfig::default()
 }
 /// A `[model.foo]` entry from config.toml, parsed directly from raw TOML (bypassing deep merge).
 /// Scalar fields are `Option` so absent means "inherit from defaults/prefetched".
@@ -3515,6 +3525,8 @@ pub struct ConfigModelOverride {
     pub show_model_fingerprint: Option<bool>,
     pub stream_tool_calls: Option<bool>,
     pub reasoning_summary: Option<ReasoningSummary>,
+    /// Replaces the whole inherited block; unset fields take their defaults.
+    pub objective_reminder: Option<ObjectiveReminderPerModelConfig>,
 }
 impl ConfigModelOverride {
     pub(crate) fn apply(
@@ -3643,6 +3655,9 @@ impl ConfigModelOverride {
         if self.reasoning_summary.is_some() {
             entry.info.reasoning_summary = self.reasoning_summary;
         }
+        if let Some(ref v) = self.objective_reminder {
+            entry.info.objective_reminder = v.clone();
+        }
         if self.api_key.is_some() {
             entry.api_key.clone_from(&self.api_key);
         }
@@ -3755,6 +3770,10 @@ pub struct ModelInfo {
     /// See [`LazinessDetectorPerModelConfig`].
     #[serde(default)]
     pub laziness_detector: LazinessDetectorPerModelConfig,
+    /// Per-model objective reminder configuration. Defaults to disabled.
+    /// See [`ObjectiveReminderPerModelConfig`].
+    #[serde(default)]
+    pub objective_reminder: ObjectiveReminderPerModelConfig,
 }
 impl Default for ModelInfo {
     /// [`Self::fallback`] with an empty slug, so construction sites (tests especially) can use `..Default::default()`
@@ -3809,6 +3828,7 @@ impl ModelInfo {
             stream_tool_calls: None,
             reasoning_summary: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
+            objective_reminder: ObjectiveReminderPerModelConfig::default(),
         }
     }
     pub(crate) fn from_config(entry: &ModelEntryConfig) -> Self {
@@ -3854,6 +3874,7 @@ impl ModelInfo {
             stream_tool_calls: entry.stream_tool_calls,
             reasoning_summary: entry.reasoning_summary,
             laziness_detector: entry.laziness_detector.clone(),
+            objective_reminder: entry.objective_reminder.clone(),
         }
     }
     /// Whether `id` is one of the ids this model sends: its own, or the one it uses at some effort.
@@ -4567,6 +4588,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 stream_tool_calls: None,
                 reasoning_summary: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
+                objective_reminder: ObjectiveReminderPerModelConfig::default(),
             },
             mtls_cert_dir: None,
             api_key: Some(bearer),
@@ -4802,6 +4824,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             stream_tool_calls: None,
             reasoning_summary: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
+            objective_reminder: ObjectiveReminderPerModelConfig::default(),
         },
         mtls_cert_dir: None,
         api_key: None,

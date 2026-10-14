@@ -42,9 +42,8 @@ flowchart LR
 - **`cortex-api`** (Rust, [`cortex-api/`](cortex-api)) is the server the client was built for: OIDC login,
   models and settings, `chat_completions` / `responses` / `messages` streaming, memory embeddings,
   server-side web search, session sync, and the update feed.
-- **The client is a rename.** All translation lives in the server. The one other change allowed is
-  compensating for a weakness of the deployed model the way the upstream authors would have, kept
-  only with a measured Terminal-Bench win ([`EVALUATION.md`](EVALUATION.md#changing-the-harness)).
+- **The client is a rename and nothing more.** All translation lives in the server, so the harness
+  runs unmodified.
 
 ## Releases
 
@@ -63,7 +62,7 @@ flowchart LR
 - Every merge that changes Rust ships with no manual step: the same verified bytes go to the feed `cortex update` reads, the previous client must update itself to them or the host rolls back, and only then does CI tag `vX.Y.Z` and mark the release latest.
 - Assets carry `SHA256SUMS` and a build-provenance attestation: `gh attestation verify <file> --repo imabee101/cortex`.
 
-Operations (deploy host, limits, backups, rollback) are in [`RUNBOOK.md`](RUNBOOK.md). How harness and model changes are measured (Terminal-Bench 2.0) is in [`EVALUATION.md`](EVALUATION.md). The per-model levers for tuning a model are in [`TUNING.md`](TUNING.md).
+Operations (deploy host, limits, backups, rollback) are in [`RUNBOOK.md`](RUNBOOK.md).
 
 ## Build from source
 

@@ -1,4 +1,4 @@
-//! Config-value resolution types re-exported from cortex-config, and per-model laziness config extracted from cortex-shell
+//! Config-value resolution types re-exported from cortex-config, and per-model laziness and objective-reminder config extracted from cortex-shell
 
 pub use cortex_config::{BoolFlag, ConfigSource, Resolved};
 
@@ -27,4 +27,23 @@ pub struct LazinessDetectorPerModelConfig {
     /// `None` defers to the harness default (`LAZINESS_INCLUDE_REASONING`, currently `true`).
     #[serde(default)]
     pub include_reasoning: Option<bool>,
+}
+
+/// Per-model configuration for the objective reminder.
+/// Before each human prompt the harness restates the user's earlier prompts in this session and tells the model that the coming message is the current request and that later instructions override earlier ones.
+/// It is for models that latch onto one word of the request or lose earlier constraints as context grows.
+/// Every field defaults to disabled.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ObjectiveReminderPerModelConfig {
+    /// Master switch. When `false` (the default), no reminder is injected for this model.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How many of the most recent earlier human prompts the reminder restates.
+    /// `None` defers to the harness default (8).
+    #[serde(default)]
+    pub max_prior_instructions: Option<u32>,
+    /// Upper bound on the characters of restated prompts; the oldest are dropped first.
+    /// `None` defers to the harness default (4000).
+    #[serde(default)]
+    pub max_chars: Option<u32>,
 }

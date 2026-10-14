@@ -287,6 +287,17 @@ env_key = "OPENAI_API_KEY"
 
 On the Responses API, Cortex asks for a `concise` reasoning summary by default; that is what the reasoning text shown in the UI comes from. `reasoning_summary` changes the request: `detailed` or `auto` for a fuller summary, or `none` to omit the field for gateways that reject it.
 
+### Models that lose track of the request
+
+Some small local models fixate on one word of a request (asked to raise a session timeout, they schedule a timer) or forget a constraint you gave several prompts earlier. `objective_reminder` adds a hidden reminder before each prompt you type. It restates your earlier prompts in this session and tells the model that the new message is the current request and that later instructions win. Runtime-originated turns (scheduled tasks, completions) get none.
+
+```toml
+[model."Qwen3.5-9B-Uncensored".objective_reminder]
+enabled = true
+max_prior_instructions = 8   # most recent earlier prompts restated (default 8)
+max_chars = 4000             # oldest are dropped first to fit (default 4000)
+```
+
 ### AWS Bedrock (Mantle)
 
 Bedrock's OpenAI-compatible gateway rejects `reasoning.summary`, so set `reasoning_summary = "none"`. It authenticates with a Bedrock API key as a bearer token; the example below mints a short-lived one through a named auth provider:

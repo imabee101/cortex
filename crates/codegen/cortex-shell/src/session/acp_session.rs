@@ -198,6 +198,8 @@ use turn_task::*;
 mod cancel;
 #[path = "acp_session_impl/reminders.rs"]
 mod reminders;
+#[path = "acp_session_impl/objective_reminder.rs"]
+mod objective_reminder;
 #[path = "acp_session_impl/subagent_handoff.rs"]
 mod subagent_handoff;
 use reminders::*;
@@ -2013,6 +2015,9 @@ mod mcp_argument_coercion_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/mcp_connecting_reminder_tests.rs"]
 mod mcp_connecting_reminder_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/objective_reminder_tests.rs"]
+mod objective_reminder_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/mcp_failed_reminder_tests.rs"]
 mod mcp_failed_reminder_tests;

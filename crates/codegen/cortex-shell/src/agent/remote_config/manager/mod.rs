@@ -492,6 +492,20 @@ impl ModelsManager {
             .unwrap_or_default()
     }
 
+    /// Per-model objective reminder config for `model_id` (disabled default when absent).
+    pub(crate) fn objective_reminder_for(
+        &self,
+        model_id: &str,
+    ) -> config::ObjectiveReminderPerModelConfig {
+        self.inner
+            .catalog
+            .read()
+            .models
+            .get(model_id)
+            .map(|e| e.info().objective_reminder.clone())
+            .unwrap_or_default()
+    }
+
     #[cfg(test)]
     pub(crate) fn insert_test_entry(&self, id: impl Into<String>, entry: ModelEntry) {
         self.inner.catalog.write().models.insert(id.into(), entry);
