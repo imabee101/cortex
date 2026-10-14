@@ -839,6 +839,6 @@ async fn hosted_search_sends_the_reasoning_budget() {
     let sent = seen.lock().expect("lock").clone();
     assert_eq!(sent.len(), 2, "{sent:?}");
     assert_eq!(sent[0]["reasoning_budget_tokens"], 2048, "{:?}", sent[0]);
-    assert_eq!(sent[0]["reasoning"]["effort"], "low");
+    assert!(sent[0].get("reasoning").is_none(), "{:?}", sent[0]);
     assert_eq!(sent[1]["reasoning_budget_tokens"], 8192, "{:?}", sent[1]);
 }

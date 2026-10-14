@@ -142,12 +142,19 @@ async fn main() -> anyhow::Result<()> {
     config.daily_search_quota = args.daily_search_quota;
     config.telemetry_retention_days = args.telemetry_retention_days;
     config.drain_secs = args.drain_secs;
-    config.reasoning_budgets = args
-        .reasoning_budgets
-        .filter(|spec| !spec.trim().is_empty())
-        .map(|spec| cortex_api::ReasoningBudgets::parse(&spec, &args.reasoning_default))
-        .transpose()
-        .map_err(|err| anyhow::anyhow!(err))?;
+    config.reasoning_budgets = Some(match args.reasoning_budgets.as_deref() {
+        Some(spec) if !spec.trim().is_empty() => {
+            let budgets = cortex_api::ReasoningBudgets::parse(spec, &args.reasoning_default)
+                .map_err(|err| anyhow::anyhow!(err))?;
+            if !budgets.covers_menu() {
+                return Err(anyhow::anyhow!(
+                    "CORTEX_API_REASONING_BUDGETS must list every menu level: none, minimal, low, medium, high, xhigh, max"
+                ));
+            }
+            budgets
+        }
+        _ => cortex_api::ReasoningBudgets::builtin(),
+    });
     config.reasoning_default = args.reasoning_default;
     config.props_wait_tries = 90;
     let drain = std::time::Duration::from_secs(config.drain_secs);
