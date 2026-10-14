@@ -1,6 +1,6 @@
 # Cortex
 
-Fork of the Grok harness. cortex-api is our server and implements what the harness expects, the way Grok's API would, under our name. This file is the only project instruction. The README is the overview.
+Fork of the upstream harness. cortex-api is our server and implements what the harness expects from its own server, under our name. This file is the only project instruction. The README is the overview.
 
 llama.cpp, cortex-api, and the harness have to agree. The API bends to the harness and translates between them. No shims, bolt-ons, or hardcoding. A request we cannot serve, or have no infrastructure for, is rejected by the API. Do not edit the harness to hide that.
 
