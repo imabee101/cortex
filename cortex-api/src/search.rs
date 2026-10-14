@@ -771,6 +771,7 @@ fn normalize_item(item: &mut Value) {
                         && part.get("type").and_then(|value| value.as_str()) == Some("output_text")
                     {
                         part.entry("annotations").or_insert(json!([]));
+                        part.entry("logprobs").or_insert(Value::Null);
                     }
                 }
             }
@@ -833,6 +834,7 @@ fn message_item(text: &str, hits: &[Hit]) -> Value {
             "type": "output_text",
             "text": text,
             "annotations": citations(hits, end),
+            "logprobs": null,
         }]
     })
 }
@@ -851,16 +853,15 @@ fn web_search_item(query: &str, hits: &[Hit]) -> Value {
 }
 
 fn ensure_usage(object: &mut serde_json::Map<String, Value>) {
-    let usage = object.entry("usage").or_insert_with(|| json!({}));
-    let Some(usage) = usage.as_object_mut() else {
-        return;
-    };
-    usage.entry("input_tokens").or_insert(json!(0));
-    usage.entry("output_tokens").or_insert(json!(0));
-    usage.entry("total_tokens").or_insert(json!(0));
-    usage
-        .entry("input_tokens_details")
-        .or_insert(json!({"cached_tokens": 0}));
+    let counted = object
+        .get("usage")
+        .and_then(|usage| usage.get("output_tokens_details"))
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(Value::as_u64)
+        .is_some();
+    if !counted {
+        object.remove("usage");
+    }
 }
 
 fn render_sse(response: &Value) -> String {
@@ -1302,11 +1303,7 @@ mod tests {
         );
         assert!(rendered.contains("Ownership is a Rust rule."), "{rendered}");
         assert_eq!(body["output"][0]["type"], "web_search_call");
-        assert!(
-            body["usage"]
-                .get("output_tokens_details")
-                .and_then(|details| details.get("reasoning_tokens"))
-                .is_none()
-        );
+        assert!(body.get("usage").is_none());
+        assert!(body["output"][1]["content"][0]["logprobs"].is_null());
     }
 }

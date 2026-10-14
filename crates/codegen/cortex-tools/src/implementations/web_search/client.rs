@@ -402,6 +402,53 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
     #[test]
+    fn search_body_deserializes_with_answer_text_and_a_citation() {
+        let response = response_from_json(serde_json::json!({
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "Qwen3.5-9B",
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "query": "rust ownership",
+                        "sources": [{"type": "url", "url": "https://www.rust-lang.org/"}]
+                    }
+                },
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Ownership is a Rust rule.",
+                        "annotations": [{
+                            "type": "url_citation",
+                            "url": "https://www.rust-lang.org/",
+                            "title": "Rust",
+                            "start_index": 0,
+                            "end_index": 1
+                        }],
+                        "logprobs": null
+                    }]
+                }
+            ]
+        }));
+        assert_eq!(
+            response.output_text().as_deref(),
+            Some("Ownership is a Rust rule.")
+        );
+        let urls = extract_citations(&response);
+        assert_eq!(urls, vec!["https://www.rust-lang.org/".to_string()]);
+    }
+
+    #[test]
     fn resolve_filters_config_allowlist_wins_over_model() {
         let client = client_with_defaults(Some(v(&["config.com"])), None);
         let (allowed, excluded) = client.resolve_filters(Some(v(&["model.com"])));

@@ -30,34 +30,24 @@ pub fn effort_menu(api_backend: &str, default: &str) -> Value {
     )
 }
 
-/// Applies a configured budget. `none` is removed so llama-server does not disable thinking.
-/// A level with no budget is removed rather than forwarded.
+/// Applies a budget for the level, then removes the level string. With no table, the built-in
+/// map is used so an advertised level is never forwarded without a budget.
 pub fn translate(path: &str, payload: &mut Value, budgets: Option<&ReasoningBudgets>) {
-    if let Some(budgets) = budgets {
-        budgets.apply(path, payload);
-    }
-    remove_none(path, payload);
-    remove_unbudgeted(path, payload);
-}
-
-fn budget_applied(path: &str, object: &serde_json::Map<String, Value>) -> bool {
-    if path.ends_with("/messages") {
-        object
-            .get("thinking")
-            .and_then(|thinking| thinking.get("budget_tokens"))
-            .is_some()
-    } else {
-        object.contains_key("reasoning_budget_tokens")
+    match budgets {
+        Some(budgets) => finish(path, payload, budgets),
+        None => finish(path, payload, &ReasoningBudgets::builtin()),
     }
 }
 
-fn remove_unbudgeted(path: &str, payload: &mut Value) {
+fn finish(path: &str, payload: &mut Value, budgets: &ReasoningBudgets) {
+    budgets.apply(path, payload);
+    strip_level(path, payload);
+}
+
+fn strip_level(path: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if budget_applied(path, object) {
-        return;
-    }
     if path.ends_with("/messages") {
         if let Some(config) = object
             .get_mut("output_config")
@@ -81,51 +71,6 @@ fn remove_unbudgeted(path: &str, payload: &mut Value) {
         return;
     }
     object.remove("reasoning_effort");
-}
-
-fn remove_none(path: &str, payload: &mut Value) {
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    if path.ends_with("/messages") {
-        let disable = object
-            .get("output_config")
-            .and_then(|config| config.get("effort"))
-            .and_then(Value::as_str)
-            == Some("none");
-        if disable
-            && let Some(config) = object
-                .get_mut("output_config")
-                .and_then(Value::as_object_mut)
-        {
-            config.remove("effort");
-        }
-        return;
-    }
-    if path.ends_with("/responses") {
-        let disable = object
-            .get("reasoning")
-            .and_then(|reasoning| reasoning.get("effort"))
-            .and_then(Value::as_str)
-            == Some("none");
-        if !disable {
-            return;
-        }
-        if let Some(reasoning) = object.get_mut("reasoning").and_then(Value::as_object_mut) {
-            reasoning.remove("effort");
-        }
-        if object
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .is_some_and(|reasoning| reasoning.is_empty())
-        {
-            object.remove("reasoning");
-        }
-        return;
-    }
-    if object.get("reasoning_effort").and_then(Value::as_str) == Some("none") {
-        object.remove("reasoning_effort");
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,6 +127,20 @@ impl ReasoningBudgets {
         })
     }
 
+    /// Budgets used when the process has no `CORTEX_API_REASONING_BUDGETS`. The client does not
+    /// read these numbers. `none` is positive because llama.cpp closes the think block at 0.
+    pub fn builtin() -> Self {
+        Self::parse(
+            "none=1024,minimal=2048,low=4096,medium=8192,high=16384,xhigh=32768,max=65536",
+            "medium",
+        )
+        .expect("builtin reasoning budgets")
+    }
+
+    pub fn covers_menu(&self) -> bool {
+        LEVELS.iter().all(|level| self.budget(level).is_some())
+    }
+
     fn budget(&self, level: &str) -> Option<u32> {
         self.levels
             .iter()
@@ -235,7 +194,14 @@ impl ReasoningBudgets {
         // that did not choose a level. Enabling thinking here would turn an explicit off into
         // the default budget. Chat and responses still carry those levels as strings.
         if messages && level.is_none() {
-            return;
+            let adaptive = object
+                .get("thinking")
+                .and_then(|thinking| thinking.get("type"))
+                .and_then(Value::as_str)
+                == Some("adaptive");
+            if !adaptive {
+                return;
+            }
         }
         let budget = match level {
             None => self.budget(&self.default),
@@ -378,7 +344,45 @@ mod tests {
 
         let mut bare = json!({"reasoning_effort": "none", "messages": []});
         translate("/v1/chat/completions", &mut bare, None);
-        assert_eq!(bare, json!({"messages": []}));
+        assert_eq!(bare["reasoning_budget_tokens"], 1024);
+        assert!(bare.get("reasoning_effort").is_none());
+
+        let mut low = json!({"reasoning_effort": "low", "messages": []});
+        translate("/v1/chat/completions", &mut low, None);
+        assert_eq!(low["reasoning_budget_tokens"], 4096);
+        assert!(low.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn messages_effort_becomes_enabled_thinking_and_drops_the_string() {
+        let mut payload = json!({"output_config": {"effort": "high"}, "messages": []});
+        translate("/v1/messages", &mut payload, None);
+        assert_eq!(
+            payload["thinking"],
+            json!({"type": "enabled", "budget_tokens": 16384})
+        );
+        assert!(payload["output_config"].get("effort").is_none());
+
+        let untouched = json!({"messages": [{"role": "user", "content": "Hello"}]});
+        let mut body = untouched.clone();
+        translate("/v1/messages", &mut body, None);
+        assert_eq!(body, untouched);
+    }
+
+    #[test]
+    fn adaptive_messages_thinking_gets_the_default_budget() {
+        let mut payload = json!({"thinking": {"type": "adaptive"}, "messages": []});
+        translate("/v1/messages", &mut payload, None);
+        assert_eq!(
+            payload["thinking"],
+            json!({"type": "enabled", "budget_tokens": 8192})
+        );
+    }
+
+    #[test]
+    fn a_partial_budget_spec_does_not_cover_the_menu() {
+        assert!(!budgets().covers_menu());
+        assert!(ReasoningBudgets::builtin().covers_menu());
     }
 
     #[test]
