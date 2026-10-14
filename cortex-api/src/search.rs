@@ -318,6 +318,9 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
     let url = format!("{}/v1/responses", origin.trim_end_matches('/'));
     let mut payload = payload.clone();
     inference::demote_late_system(&mut payload);
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        budgets.apply("/v1/responses", &mut payload);
+    }
     let mut request = state.http.post(url).json(&payload);
     if let Some(key) = state
         .config

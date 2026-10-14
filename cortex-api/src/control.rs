@@ -170,7 +170,10 @@ pub fn model_list(state: &AppState) -> serde_json::Value {
         "supports_backend_search": crate::search::configured(state),
     });
     if let Some(budgets) = &state.config.reasoning_budgets {
-        model["reasoning_efforts"] = budgets.menu();
+        let menu = budgets.menu_for(&state.config.api_backend);
+        if menu.as_array().is_some_and(|items| !items.is_empty()) {
+            model["reasoning_efforts"] = menu;
+        }
     }
     json!({ "data": [model] })
 }

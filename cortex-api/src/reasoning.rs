@@ -72,18 +72,29 @@ impl ReasoningBudgets {
 
     /// The menu for the model entry, in the shape the harness parses: one option per level, the
     /// default marked, so the harness sends a level on every main turn.
-    pub fn menu(&self) -> Value {
+    ///
+    /// `minimal` is dropped on the messages backend. The harness never writes that level there
+    /// (`ReasoningEffort::to_messages_api`), so offering it would select a budget that is not sent.
+    pub fn menu_for(&self, api_backend: &str) -> Value {
+        let messages = api_backend == "messages";
         Value::Array(
             self.levels
                 .iter()
+                .filter(|(level, _)| !(messages && level == "minimal"))
                 .map(|(level, _)| json!({"value": level, "default": *level == self.default}))
                 .collect(),
         )
     }
 
-    /// Sets llama-server's budget on a request. A configured level gets its budget; a request
-    /// without a level (compaction, titles and other side calls) gets the default level's; any
-    /// other level, such as `none`, is left to llama-server unchanged.
+    /// `minimal` on the messages backend is refused at startup. See [`menu_for`](Self::menu_for).
+    pub fn rejected_on_messages(&self) -> bool {
+        self.levels.iter().any(|(level, _)| level == "minimal")
+    }
+
+    /// Sets llama-server's budget on a request. A configured level gets its budget. Chat and
+    /// responses requests with no level get the default, which bounds compaction and titles.
+    /// A messages request with no effort is left unchanged: the harness omits both `none` and
+    /// `minimal` on that route, so a missing effort is not a request for the default.
     pub fn apply(&self, path: &str, payload: &mut Value) {
         let Some(object) = payload.as_object_mut() else {
             return;
@@ -101,6 +112,12 @@ impl ReasoningBudgets {
             object.get("reasoning_effort")
         }
         .and_then(Value::as_str);
+        // On messages, no effort string means the harness sent none or minimal, or a side call
+        // that did not choose a level. Enabling thinking here would turn an explicit off into
+        // the default budget. Chat and responses still carry those levels as strings.
+        if messages && level.is_none() {
+            return;
+        }
         let budget = match level {
             None => self.budget(&self.default),
             Some(level) => self.budget(level),
@@ -151,13 +168,24 @@ mod tests {
     #[test]
     fn menu_lists_levels_in_order_with_the_default_marked() {
         assert_eq!(
-            budgets().menu(),
+            budgets().menu_for("chat_completions"),
             json!([
                 {"value": "low", "default": false},
                 {"value": "medium", "default": true},
                 {"value": "high", "default": false},
             ])
         );
+    }
+
+    #[test]
+    fn messages_menu_drops_minimal_and_startup_rejects_it() {
+        let with_minimal = ReasoningBudgets::parse("minimal=512,low=2048", "low").expect("parse");
+        assert!(with_minimal.rejected_on_messages());
+        assert_eq!(
+            with_minimal.menu_for("messages"),
+            json!([{"value": "low", "default": true}])
+        );
+        assert!(!budgets().rejected_on_messages());
     }
 
     #[test]
@@ -173,6 +201,24 @@ mod tests {
         let mut payload = json!({"reasoning": {"effort": "low"}, "input": []});
         budgets().apply("/v1/responses", &mut payload);
         assert_eq!(payload["reasoning_budget_tokens"], 2048);
+    }
+
+    #[test]
+    fn messages_without_an_effort_stay_unchanged() {
+        // What build_messages_request emits for ReasoningEffort::None and ::Minimal:
+        // to_messages_api returns None, so neither output_config nor thinking is set.
+        for payload in [
+            json!({"model": "m", "max_tokens": 0, "messages": [{"role": "user", "content": "Hello"}]}),
+            json!({
+                "model": "m",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "output_config": {"format": {"type": "json_schema", "schema": {}}},
+            }),
+        ] {
+            let mut body = payload.clone();
+            budgets().apply("/v1/messages", &mut body);
+            assert_eq!(body, payload);
+        }
     }
 
     #[test]

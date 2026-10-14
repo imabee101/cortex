@@ -792,3 +792,53 @@ async fn without_a_search_token_the_hosted_tool_is_dropped_and_the_turn_still_ru
         "the hosted search tool never reaches llama-server: {forwarded}"
     );
 }
+
+#[tokio::test]
+async fn hosted_search_sends_the_reasoning_budget() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let llama = bind(
+        Router::new()
+            .route("/props", get(|| async { Json(json!({"default_generation_settings": {"n_ctx": 4096}})) }))
+            .route(
+                "/v1/responses",
+                post(move |body: axum::body::Bytes| {
+                    let sink = sink.clone();
+                    async move {
+                        let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+                        sink.lock().expect("lock").push(payload);
+                        Json(json!({"output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "answer"}]}]}))
+                    }
+                }),
+            ),
+    )
+    .await;
+    let api = start("cortex_api_hard_budget", |config| {
+        config.llama_url = Some(llama);
+        config.brave_token = Some("token".to_owned());
+        config.reasoning_budgets = Some(
+            cortex_api::ReasoningBudgets::parse("low=2048,medium=8192", "medium").expect("budgets"),
+        );
+    })
+    .await;
+    let token = sign_in(&api, "budget@example.com").await;
+    for body in [
+        json!({"model": "m", "input": "what is rust", "reasoning": {"effort": "low"}, "tools": [{"type": "web_search"}]}),
+        json!({"model": "m", "input": "what is rust", "tools": [{"type": "web_search"}]}),
+    ] {
+        let answer = api
+            .http
+            .post(format!("{}/v1/responses", api.base))
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await
+            .expect("responses");
+        assert_eq!(answer.status(), 200);
+    }
+    let sent = seen.lock().expect("lock").clone();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert_eq!(sent[0]["reasoning_budget_tokens"], 2048, "{:?}", sent[0]);
+    assert_eq!(sent[0]["reasoning"]["effort"], "low");
+    assert_eq!(sent[1]["reasoning_budget_tokens"], 8192, "{:?}", sent[1]);
+}
