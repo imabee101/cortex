@@ -450,9 +450,7 @@ async fn forward(
     if path.ends_with("/chat/completions") {
         force_named_tool(&mut payload);
     }
-    if let Some(budgets) = &state.config.reasoning_budgets {
-        budgets.apply(path, &mut payload);
-    }
+    crate::reasoning::translate(path, &mut payload, state.config.reasoning_budgets.as_ref());
     let stream = payload
         .get("stream")
         .and_then(|value| value.as_bool())
@@ -965,8 +963,6 @@ fn normalize_object(map: &mut Map<String, Value>) {
         map.entry("total_tokens").or_insert(json!(0));
         map.entry("input_tokens_details")
             .or_insert(json!({"cached_tokens": 0}));
-        map.entry("output_tokens_details")
-            .or_insert(json!({"reasoning_tokens": 0}));
     }
     if map.get("type").and_then(|kind| kind.as_str()) == Some("output_text") {
         map.entry("annotations").or_insert(json!([]));
@@ -1099,9 +1095,18 @@ mod tests {
         });
         normalize_payload(&mut event);
         assert_eq!(event["sequence_number"], 1);
+        assert!(
+            event["response"]["usage"]
+                .get("output_tokens_details")
+                .is_none()
+        );
+
+        let mut counted = event.clone();
+        counted["response"]["usage"]["output_tokens_details"] = json!({"reasoning_tokens": 12});
+        normalize_payload(&mut counted);
         assert_eq!(
-            event["response"]["usage"]["output_tokens_details"]["reasoning_tokens"],
-            0
+            counted["response"]["usage"]["output_tokens_details"]["reasoning_tokens"],
+            12
         );
     }
 

@@ -112,9 +112,18 @@ async fn inference_normalizes_llama_shapes() {
         .expect("models json");
     assert_eq!(models["data"][0]["context_window"], 4096);
     // The harness's effort menu, with the level it selects by default.
+    assert_eq!(models["data"][0]["supports_reasoning_effort"], true);
     assert_eq!(
         models["data"][0]["reasoning_efforts"],
-        json!([{"value": "low", "default": false}, {"value": "medium", "default": true}])
+        json!([
+            {"value": "none", "default": false},
+            {"value": "minimal", "default": false},
+            {"value": "low", "default": false},
+            {"value": "medium", "default": true},
+            {"value": "high", "default": false},
+            {"value": "xhigh", "default": false},
+            {"value": "max", "default": false}
+        ])
     );
 
     let chat = http

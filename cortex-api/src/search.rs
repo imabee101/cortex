@@ -318,9 +318,11 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
     let url = format!("{}/v1/responses", origin.trim_end_matches('/'));
     let mut payload = payload.clone();
     inference::demote_late_system(&mut payload);
-    if let Some(budgets) = &state.config.reasoning_budgets {
-        budgets.apply("/v1/responses", &mut payload);
-    }
+    crate::reasoning::translate(
+        "/v1/responses",
+        &mut payload,
+        state.config.reasoning_budgets.as_ref(),
+    );
     let mut request = state.http.post(url).json(&payload);
     if let Some(key) = state
         .config
@@ -859,9 +861,6 @@ fn ensure_usage(object: &mut serde_json::Map<String, Value>) {
     usage
         .entry("input_tokens_details")
         .or_insert(json!({"cached_tokens": 0}));
-    usage
-        .entry("output_tokens_details")
-        .or_insert(json!({"reasoning_tokens": 0}));
 }
 
 fn render_sse(response: &Value) -> String {
@@ -1303,6 +1302,11 @@ mod tests {
         );
         assert!(rendered.contains("Ownership is a Rust rule."), "{rendered}");
         assert_eq!(body["output"][0]["type"], "web_search_call");
-        assert!(body["usage"]["output_tokens_details"]["reasoning_tokens"].is_number());
+        assert!(
+            body["usage"]
+                .get("output_tokens_details")
+                .and_then(|details| details.get("reasoning_tokens"))
+                .is_none()
+        );
     }
 }

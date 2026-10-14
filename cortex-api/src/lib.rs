@@ -93,9 +93,11 @@ pub struct Config {
     pub props_wait_tries: u32,
     /// How often the context window and vision flag are re-read from llama-server.
     pub props_refresh_secs: u64,
-    /// Thinking budget per reasoning level, advertised to the harness as its effort menu; `None`
-    /// advertises no menu and leaves requests as they come.
+    /// Thinking budget per reasoning level. The model entry still lists every level when this is
+    /// unset; a listed level then has no token budget.
     pub reasoning_budgets: Option<ReasoningBudgets>,
+    /// Level marked default on the model entry. The process default is `medium`.
+    pub reasoning_default: String,
 }
 
 impl Config {
@@ -137,6 +139,7 @@ impl Config {
             props_wait_tries: 0,
             props_refresh_secs: 60,
             reasoning_budgets: None,
+            reasoning_default: "medium".to_owned(),
         }
     }
 }

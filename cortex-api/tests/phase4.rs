@@ -412,7 +412,10 @@ async fn phase4_inventory_routes() {
         .await
         .expect("models json");
     assert_eq!(models["data"][0]["context_window"], 4096);
-    assert_eq!(models["data"][0]["supports_backend_search"], true);
+    assert_eq!(
+        models["data"][0]["supports_backend_search"], false,
+        "chat completions keeps the function tool; hosted search is the responses backend"
+    );
 
     let missing = http
         .put(format!("{base}/sessions/s1"))
