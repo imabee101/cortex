@@ -549,6 +549,38 @@ mod tests {
     }
 
     #[test]
+    fn objective_reminder_parses_and_reaches_the_resolved_model() {
+        let cfg = parse_cfg(
+            r#"
+            [model."local.qwen"]
+            model = "local.qwen"
+            base_url = "https://llm.example.com/v1"
+
+            [model."local.qwen".objective_reminder]
+            enabled = true
+            max_prior_instructions = 3
+            "#,
+        );
+        let expected = crate::agent::config::ObjectiveReminderPerModelConfig {
+            enabled: true,
+            max_prior_instructions: Some(3),
+            max_chars: None,
+        };
+        assert_eq!(
+            cfg.config_models
+                .get("local.qwen")
+                .unwrap()
+                .objective_reminder,
+            Some(expected.clone())
+        );
+        let resolved = crate::agent::config::resolve_model_list(&cfg, None);
+        assert_eq!(
+            resolved.get("local.qwen").unwrap().info.objective_reminder,
+            expected
+        );
+    }
+
+    #[test]
     fn invalid_reasoning_summary_skips_field_keeps_model() {
         let cfg = parse_cfg(
             r#"
@@ -772,6 +804,11 @@ mod tests {
             show_model_fingerprint: Some(true),
             stream_tool_calls: Some(false),
             reasoning_summary: Some(ReasoningSummary::None),
+            objective_reminder: Some(crate::agent::config::ObjectiveReminderPerModelConfig {
+                enabled: true,
+                max_prior_instructions: Some(4),
+                max_chars: Some(2000),
+            }),
         }
     }
 

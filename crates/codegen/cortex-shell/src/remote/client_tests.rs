@@ -621,6 +621,45 @@ fn parse_remote_model_value_partial_block_uses_field_defaults() {
     assert_eq!(result.laziness_detector, expected);
 }
 #[test]
+fn parse_remote_model_value_parses_objective_reminder_in_every_spelling() {
+    let expected = crate::agent::config::ObjectiveReminderPerModelConfig {
+        enabled: true,
+        max_prior_instructions: Some(5),
+        max_chars: Some(3000),
+    };
+    let block = serde_json::json!({
+        "enabled": true,
+        "max_prior_instructions": 5,
+        "max_chars": 3000,
+    });
+    for value in [
+        serde_json::json!({ "model": "local", "context_window": 256_000, "objectiveReminder": block }),
+        serde_json::json!({ "model": "local", "context_window": 256_000, "objective_reminder": block }),
+        serde_json::json!({ "model": "local", "context_window": 256_000, "_meta": { "objectiveReminder": block } }),
+    ] {
+        let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+        assert_eq!(result.objective_reminder, expected, "{value}");
+    }
+}
+#[test]
+fn parse_remote_model_value_objective_reminder_absent_or_malformed_is_disabled() {
+    for value in [
+        serde_json::json!({ "model": "local", "context_window": 256_000 }),
+        serde_json::json!({
+            "model": "local",
+            "context_window": 256_000,
+            "objectiveReminder": { "enabled": true, "max_chars": "lots" },
+        }),
+    ] {
+        let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+        assert_eq!(
+            result.objective_reminder,
+            crate::agent::config::ObjectiveReminderPerModelConfig::default(),
+            "{value}"
+        );
+    }
+}
+#[test]
 fn parse_remote_model_value_malformed_block_falls_back_to_default() {
     let value = serde_json::json!({
         "model": "cortex-4",
