@@ -35,6 +35,9 @@ async fn inference_normalizes_llama_shapes() {
     truncate();
     let mut config = cortex_api::Config::new("127.0.0.1:0".parse().expect("addr"), DB.to_owned());
     config.llama_url = Some(llama);
+    config.reasoning_budgets = Some(
+        cortex_api::ReasoningBudgets::parse("low=2048,medium=8192", "medium").expect("budgets"),
+    );
     let running = cortex_api::serve(config).await.expect("serve");
     let base = format!("http://{}", running.addr);
     let http = reqwest::Client::builder()
@@ -108,6 +111,11 @@ async fn inference_normalizes_llama_shapes() {
         .await
         .expect("models json");
     assert_eq!(models["data"][0]["context_window"], 4096);
+    // The harness's effort menu, with the level it selects by default.
+    assert_eq!(
+        models["data"][0]["reasoning_efforts"],
+        json!([{"value": "low", "default": false}, {"value": "medium", "default": true}])
+    );
 
     let chat = http
         .post(format!("{base}/v1/chat/completions"))
@@ -155,6 +163,33 @@ async fn inference_normalizes_llama_shapes() {
         LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst),
         77
     );
+
+    // llama-server receives the thinking budget of the level the harness sent, and the default
+    // level's budget when the request names no level.
+    for (body, budget) in [
+        (
+            json!({"model": "m", "reasoning_effort": "low", "messages": [{"role": "user", "content": "hi"}]}),
+            2048,
+        ),
+        (
+            json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+            8192,
+        ),
+    ] {
+        http.post(format!("{base}/v1/chat/completions"))
+            .bearer_auth(access)
+            .json(&body)
+            .send()
+            .await
+            .expect("chat budget")
+            .bytes()
+            .await
+            .expect("chat budget body");
+        assert_eq!(
+            LAST_REASONING_BUDGET.load(std::sync::atomic::Ordering::SeqCst),
+            budget
+        );
+    }
 
     // A generation that only repeats itself is cut, the slot comes back, and the upstream is dropped.
     let looping = http
@@ -359,6 +394,7 @@ async fn props() -> impl IntoResponse {
 static LAST_TOOLING: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
 static UPSTREAM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LAST_MAX_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_REASONING_BUDGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LOOP_DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct DropFlag;
@@ -376,6 +412,10 @@ async fn chat(request: Request) -> axum::response::Response {
     let payload: Value = serde_json::from_slice(&bytes).unwrap_or(json!({}));
     LAST_MAX_TOKENS.store(
         payload["max_tokens"].as_u64().unwrap_or(0),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    LAST_REASONING_BUDGET.store(
+        payload["reasoning_budget_tokens"].as_u64().unwrap_or(0),
         std::sync::atomic::Ordering::SeqCst,
     );
     if payload["model"] == "overflow" {

@@ -450,6 +450,9 @@ async fn forward(
     if path.ends_with("/chat/completions") {
         force_named_tool(&mut payload);
     }
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        budgets.apply(path, &mut payload);
+    }
     let stream = payload
         .get("stream")
         .and_then(|value| value.as_bool())

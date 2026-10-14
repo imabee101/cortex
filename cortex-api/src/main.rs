@@ -79,6 +79,12 @@ struct Args {
     telemetry_retention_days: i32,
     #[arg(long, env = "CORTEX_API_DRAIN_SECS", default_value_t = 900)]
     drain_secs: u64,
+    /// Thinking budget per reasoning level, `level=tokens,...`; unset leaves reasoning unbounded.
+    #[arg(long, env = "CORTEX_API_REASONING_BUDGETS")]
+    reasoning_budgets: Option<String>,
+    /// The level the harness selects unless the user picks another; must be among the budgets.
+    #[arg(long, env = "CORTEX_API_REASONING_DEFAULT", default_value = "medium")]
+    reasoning_default: String,
 }
 
 /// SIGINT from a terminal, SIGTERM from the service manager.
@@ -136,6 +142,12 @@ async fn main() -> anyhow::Result<()> {
     config.daily_search_quota = args.daily_search_quota;
     config.telemetry_retention_days = args.telemetry_retention_days;
     config.drain_secs = args.drain_secs;
+    config.reasoning_budgets = args
+        .reasoning_budgets
+        .filter(|spec| !spec.trim().is_empty())
+        .map(|spec| cortex_api::ReasoningBudgets::parse(&spec, &args.reasoning_default))
+        .transpose()
+        .map_err(|err| anyhow::anyhow!(err))?;
     config.props_wait_tries = 90;
     let drain = std::time::Duration::from_secs(config.drain_secs);
     let running = cortex_api::serve(config).await?;
