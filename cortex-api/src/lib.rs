@@ -9,8 +9,11 @@ mod media;
 mod oidc;
 mod pages;
 mod product;
+mod reasoning;
 mod relay;
 mod search;
+
+pub use reasoning::ReasoningBudgets;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -90,6 +93,9 @@ pub struct Config {
     pub props_wait_tries: u32,
     /// How often the context window and vision flag are re-read from llama-server.
     pub props_refresh_secs: u64,
+    /// Thinking budget per reasoning level, advertised to the harness as its effort menu; `None`
+    /// advertises no menu and leaves requests as they come.
+    pub reasoning_budgets: Option<ReasoningBudgets>,
 }
 
 impl Config {
@@ -130,6 +136,7 @@ impl Config {
             purge_secs: 3600,
             props_wait_tries: 0,
             props_refresh_secs: 60,
+            reasoning_budgets: None,
         }
     }
 }

@@ -41,7 +41,7 @@ Limits in `cortex-api.service` override the code defaults: queue 256 deep and 54
 
 `/v1/models` reports llama-server's real window (`n_ctx` from `/props`), and every inference response carries it in `x-cortex-context-window`. The client compacts at 85% of it, counting exactly up to the last response and at 4 bytes a token since, which runs below llama's count on code. When a request still overflows, llama-server's `exceed_context_size_error` reaches the client unchanged with half the window in that header: the client compacts only when its count is over the reported window, then resubmits, and the next success restores the full window.
 
-Knobs (environment, defaults in `cortex-api/src/main.rs`): `CORTEX_API_EMBED`, `_EMBED_MODEL`, `_EMBED_DIMENSIONS` (memory embeddings are advertised in settings only when the first two are set), `_DIST_DIR`, `CORTEX_API_PARALLEL` (0 reads slots from llama), `_QUEUE_MAX` 8, `_QUEUE_WAIT_SECS` 30, `_IP_RATE_PER_MIN`, `_USER_RATE_PER_MIN`, `_KEY_LIMIT` 25 (live API keys per account), `_INFERENCE_PER_MIN`, `_DAILY_INFERENCE_QUOTA`, `_DAILY_SEARCH_QUOTA`, `_TELEMETRY_RETENTION_DAYS`.
+Knobs (environment, defaults in `cortex-api/src/main.rs`): `CORTEX_API_EMBED`, `_EMBED_MODEL`, `_EMBED_DIMENSIONS` (memory embeddings are advertised in settings only when the first two are set), `_DIST_DIR`, `CORTEX_API_PARALLEL` (0 reads slots from llama), `_QUEUE_MAX` 8, `_QUEUE_WAIT_SECS` 30, `_IP_RATE_PER_MIN`, `_USER_RATE_PER_MIN`, `_KEY_LIMIT` 25 (live API keys per account), `_INFERENCE_PER_MIN`, `_DAILY_INFERENCE_QUOTA`, `_DAILY_SEARCH_QUOTA`, `_TELEMETRY_RETENTION_DAYS`, `_REASONING_BUDGETS` (`level=tokens,...`; unset advertises no effort menu and leaves thinking unbounded) with `_REASONING_DEFAULT` (`medium`).
 
 ## Check
 

@@ -161,16 +161,21 @@ pub async fn models(State(state): State<AppState>, AuthUser(_user): AuthUser) ->
 }
 
 pub fn model_list(state: &AppState) -> serde_json::Value {
-    json!({
-        "data": [{
-            "id": state.config.model_id,
-            "model": state.config.model_id,
-            "name": state.config.model_id,
-            "context_window": crate::inference::context_window(state),
-            "api_backend": state.config.api_backend,
-            "supports_backend_search": crate::search::configured(state),
-        }]
-    })
+    let mut model = json!({
+        "id": state.config.model_id,
+        "model": state.config.model_id,
+        "name": state.config.model_id,
+        "context_window": crate::inference::context_window(state),
+        "api_backend": state.config.api_backend,
+        "supports_backend_search": crate::search::configured(state),
+    });
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        let menu = budgets.menu_for(&state.config.api_backend);
+        if menu.as_array().is_some_and(|items| !items.is_empty()) {
+            model["reasoning_efforts"] = menu;
+        }
+    }
+    json!({ "data": [model] })
 }
 
 pub async fn subagent_bundle(AuthUser(_user): AuthUser) -> impl IntoResponse {
