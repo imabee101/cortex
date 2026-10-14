@@ -1,14 +1,19 @@
+mod api_keys;
 mod background;
 mod control;
 mod db;
 mod inference;
 pub mod jwt;
 mod limits;
+mod media;
 mod oidc;
 mod pages;
 mod product;
+mod reasoning;
 mod relay;
 mod search;
+
+pub use reasoning::ReasoningBudgets;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,14 +43,14 @@ use crate::jwt::KeySet;
 pub const ISSUER: &str = "https://llm.imabee.com";
 pub const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 pub const TOKEN_HEADER: &str = "cortex-cli";
+/// Every API key starts with this, so secret scanners and the auth path can tell it from a JWT.
+pub const API_KEY_PREFIX: &str = "cortex-";
 
 #[derive(Clone)]
 pub struct Config {
     pub listen: SocketAddr,
     pub database_url: String,
     pub context_window: u64,
-    /// Share of the context window advertised to the harness, 1 to 100.
-    pub context_percent: u64,
     pub model_id: String,
     /// Wire protocol the harness uses for sampling: chat_completions, responses, or messages.
     pub api_backend: String,
@@ -72,9 +77,10 @@ pub struct Config {
     pub queue_max: usize,
     pub queue_wait_secs: u64,
     /// Ceiling on generated tokens per request; 0 leaves requests unbounded.
-    pub max_output_tokens: u64,
     pub ip_rate_per_min: u32,
     pub user_rate_per_min: u32,
+    /// Live API keys one account may hold.
+    pub api_key_limit: i64,
     pub inference_per_min: u32,
     pub daily_inference_quota: i32,
     pub daily_search_quota: i32,
@@ -87,6 +93,9 @@ pub struct Config {
     pub props_wait_tries: u32,
     /// How often the context window and vision flag are re-read from llama-server.
     pub props_refresh_secs: u64,
+    /// Thinking budget per reasoning level, advertised to the harness as its effort menu; `None`
+    /// advertises no menu and leaves requests as they come.
+    pub reasoning_budgets: Option<ReasoningBudgets>,
 }
 
 impl Config {
@@ -95,7 +104,6 @@ impl Config {
             listen,
             database_url,
             context_window: 98304,
-            context_percent: 40,
             model_id: "Qwen3.5-9B".to_owned(),
             api_backend: "chat_completions".to_owned(),
             release_version: "0.0.0".to_owned(),
@@ -116,9 +124,9 @@ impl Config {
             parallel: 0,
             queue_max: 8,
             queue_wait_secs: 30,
-            max_output_tokens: 24576,
             ip_rate_per_min: 1200,
             user_rate_per_min: 1200,
+            api_key_limit: 25,
             inference_per_min: 120,
             daily_inference_quota: 5000,
             daily_search_quota: 300,
@@ -128,6 +136,7 @@ impl Config {
             purge_secs: 3600,
             props_wait_tries: 0,
             props_refresh_secs: 60,
+            reasoning_budgets: None,
         }
     }
 }
@@ -142,7 +151,6 @@ pub struct AppState {
     /// Streams cut because the model was repeating itself.
     pub loops_aborted: Arc<AtomicU64>,
     /// Streams cut because the output ceiling ended a generation that was all reasoning.
-    pub reasoning_overruns: Arc<AtomicU64>,
     pub draining: Arc<AtomicBool>,
     pub limiter: Arc<limits::Limiter>,
     pub llama_breaker: Arc<limits::Breaker>,
@@ -244,7 +252,6 @@ pub async fn serve(config: Config) -> anyhow::Result<Running> {
         requests: Arc::new(AtomicU64::new(0)),
         throttled: Arc::new(AtomicU64::new(0)),
         loops_aborted: Arc::new(AtomicU64::new(0)),
-        reasoning_overruns: Arc::new(AtomicU64::new(0)),
         draining: Arc::new(AtomicBool::new(false)),
         limiter: Arc::new(limits::Limiter::default()),
         llama_breaker: Arc::new(limits::Breaker::new(5, 15_000)),
@@ -292,6 +299,11 @@ pub fn router(state: AppState) -> Router {
         .route("/oauth2/device/code", post(oidc::device_code))
         .route("/device", get(oidc::device_page))
         .route("/device/decide", post(oidc::device_decide))
+        .route(
+            api_keys::CONSOLE_PATH,
+            get(api_keys::page).post(api_keys::create),
+        )
+        .route("/account/api-keys/revoke", post(api_keys::revoke))
         .route("/healthz", get(control::healthz))
         .route("/readyz", get(control::readyz))
         .route("/metrics", get(control::metrics))
@@ -342,6 +354,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/responses", post(inference::responses))
         .route("/v1/messages", post(inference::messages))
         .route("/v1/embeddings", post(inference::embeddings))
+        .route("/v1/images/generations", post(media::unavailable))
+        .route("/v1/images/edits", post(media::unavailable))
+        .route("/v1/videos/generations", post(media::unavailable))
+        .route("/v1/videos/{id}", get(media::unavailable))
+        .route("/v1/stt", get(media::stt))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
     let product = Router::new()
         .route("/sessions", get(product::list_sessions))
@@ -566,7 +583,14 @@ mod auth {
     use axum::http::request::Parts;
     use uuid::Uuid;
 
+    /// The account behind a request authenticated with an access token or an API key.
     pub struct AuthUser(pub Uuid);
+
+    /// The account plus, when the request used one, the API key it authenticated with.
+    pub struct Caller {
+        pub user: Uuid,
+        pub api_key: Option<db::ApiKey>,
+    }
 
     impl FromRequestParts<AppState> for AuthUser {
         type Rejection = Response;
@@ -575,21 +599,43 @@ mod auth {
             parts: &mut Parts,
             state: &AppState,
         ) -> Result<Self, Self::Rejection> {
-            user_from_headers(state, &parts.headers).map(AuthUser)
+            caller_from_headers(state, &parts.headers)
+                .await
+                .map(|caller| AuthUser(caller.user))
         }
     }
 
-    pub(crate) fn user_from_headers(
+    impl FromRequestParts<AppState> for Caller {
+        type Rejection = Response;
+
+        async fn from_request_parts(
+            parts: &mut Parts,
+            state: &AppState,
+        ) -> Result<Self, Self::Rejection> {
+            caller_from_headers(state, &parts.headers).await
+        }
+    }
+
+    pub(crate) async fn user_from_headers(
         state: &AppState,
         headers: &axum::http::HeaderMap,
     ) -> Result<Uuid, Response> {
-        if let Some(header) = headers.get("x-cortex-token-auth") {
-            let Ok(value) = header.to_str() else {
-                return Err(StatusCode::UNAUTHORIZED.into_response());
-            };
-            if value != TOKEN_HEADER {
-                return Err(StatusCode::UNAUTHORIZED.into_response());
-            }
+        caller_from_headers(state, headers)
+            .await
+            .map(|caller| caller.user)
+    }
+
+    /// A bearer is an API key when it carries the key prefix and an access token otherwise; an
+    /// access token is a JWT and never starts with it. The `x-cortex-token-auth` marker cannot
+    /// decide: the client adds it to every request for this host, an API key's included.
+    async fn caller_from_headers(
+        state: &AppState,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<Caller, Response> {
+        if let Some(header) = headers.get("x-cortex-token-auth")
+            && header.to_str().ok() != Some(TOKEN_HEADER)
+        {
+            return Err(StatusCode::UNAUTHORIZED.into_response());
         }
         let Some(auth) = headers.get(axum::http::header::AUTHORIZATION) else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
@@ -600,12 +646,29 @@ mod auth {
         let Some(token) = auth.strip_prefix("Bearer ") else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
         };
-        let claims = jwt::verify_access(token, &state.keys().published)
-            .map_err(|_| StatusCode::UNAUTHORIZED.into_response())?;
+        let caller = if token.starts_with(API_KEY_PREFIX) {
+            let principal = state
+                .db
+                .api_key_principal(&jwt::sha256_hex(token.as_bytes()))
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?
+                .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())?;
+            Caller {
+                user: principal.user_id,
+                api_key: Some(principal.key),
+            }
+        } else {
+            let claims = jwt::verify_access(token, &state.keys().published)
+                .map_err(|_| StatusCode::UNAUTHORIZED.into_response())?;
+            Caller {
+                user: claims.sub,
+                api_key: None,
+            }
+        };
         state
             .limiter
             .hit(
-                &format!("user:{}", claims.sub),
+                &format!("user:{}", caller.user),
                 state.config.user_rate_per_min,
                 Duration::from_secs(60),
             )
@@ -615,6 +678,6 @@ mod auth {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 too_many(retry)
             })?;
-        Ok(claims.sub)
+        Ok(caller)
     }
 }

@@ -15,7 +15,7 @@ use crate::types::compat::CompatConfig;
 
 /// Filenames (and relative paths) recognized as project instruction files. The runtime list is produced by
 /// `CompatConfig::agent_filenames()`; this constant is retained only as the all-on reference that the pinning test
-/// `compat_default_matches_legacy_constants` asserts parity against.
+/// `compat_all_enabled_matches_reference_constants` asserts parity against.
 #[cfg(test)]
 pub(crate) const AGENT_FILENAMES: &[&str] = &[
     "Agents.md",
@@ -748,6 +748,7 @@ mod tests {
         fs::write(rules_dir.join("style.md"), "# Style rules").unwrap();
 
         let mut tracker = AgentsMdTracker::new();
+        tracker.set_compat(CompatConfig::all_enabled());
         tracker
             .seed(vec![], Some(root.to_path_buf()), vec![], None)
             .await;
@@ -774,6 +775,7 @@ mod tests {
         fs::write(rules_dir.join("style.md"), "# Style").unwrap();
 
         let mut tracker = AgentsMdTracker::new();
+        tracker.set_compat(CompatConfig::all_enabled());
         tracker
             .seed(vec![], Some(root.to_path_buf()), vec![], None)
             .await;
@@ -799,6 +801,7 @@ mod tests {
         fs::write(claude_dir.join("CLAUDE.md"), "# Project instructions").unwrap();
 
         let mut tracker = AgentsMdTracker::new();
+        tracker.set_compat(CompatConfig::all_enabled());
         tracker
             .seed(vec![], Some(root.to_path_buf()), vec![], None)
             .await;
@@ -815,13 +818,12 @@ mod tests {
 
     // ── compat gating + byte-for-byte parity ───────────────
 
-    /// Pin that the all-on compat helpers reproduce the legacy constants
-    /// exactly (same entries, same order). If either drifts, the
-    /// byte-for-byte default-behavior invariant is broken.
+    /// Pin that the all-on compat helpers reproduce the reference constants
+    /// exactly (same entries, same order).
     #[test]
-    fn compat_default_matches_legacy_constants() {
+    fn compat_all_enabled_matches_reference_constants() {
         use crate::types::compat::CompatConfig;
-        let c = CompatConfig::default();
+        let c = CompatConfig::all_enabled();
         assert_eq!(c.agent_filenames(), AGENT_FILENAMES.to_vec());
         assert_eq!(c.rules_dirs(), RULES_DIRS.to_vec());
     }
@@ -838,7 +840,7 @@ mod tests {
         fs::create_dir_all(&rules_dir).unwrap();
         fs::write(rules_dir.join("r.md"), "# Cursor rule").unwrap();
 
-        let mut compat = CompatConfig::default();
+        let mut compat = CompatConfig::all_enabled();
         compat.cursor.rules = false;
 
         let mut tracker = AgentsMdTracker::new();
@@ -866,7 +868,7 @@ mod tests {
         fs::create_dir_all(&claude_dir).unwrap();
         fs::write(claude_dir.join("CLAUDE.md"), "# Project instructions").unwrap();
 
-        let mut compat = CompatConfig::default();
+        let mut compat = CompatConfig::all_enabled();
         compat.claude.agents = false;
 
         let mut tracker = AgentsMdTracker::new();

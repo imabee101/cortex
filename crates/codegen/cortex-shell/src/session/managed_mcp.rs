@@ -436,7 +436,7 @@ mod tests {
             .headers(vec![]),
         )];
         let cwd = empty_cwd();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let merged = merge_managed_mcp_servers(client, cwd.path(), None, &compat);
         assert!(
             merged.iter().any(|s| matches!(
@@ -525,7 +525,7 @@ url = "https://denied.corp.com/mcp"
         )
         .unwrap();
 
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let inputs = McpDiscoveryInputs {
             cwd: cwd.path(),
             plugin_registry: None,
@@ -627,7 +627,7 @@ command = "echo"
         let registry =
             plugin_registry_with_inline_server(plugin_root.path(), "pluginsrv", PLUGIN_MCP_URL);
 
-        let mut compat = cortex_tools::types::compat::CompatConfig::default();
+        let mut compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         compat.claude.mcps = false;
         compat.cursor.mcps = false;
         let inputs = McpDiscoveryInputs {
@@ -809,7 +809,7 @@ headers = { "X-A" = "1", "X-B" = "2", "X-C" = "3" }
         )
         .unwrap();
 
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let by_name = |servers: Vec<acp::McpServer>| -> HashMap<String, acp::McpServer> {
             servers
                 .into_iter()
@@ -947,7 +947,7 @@ headers = { "X-A" = "1", "X-B" = "2", "X-C" = "3" }
             "https://denied.corp.com/mcp",
         );
         let cwd = empty_cwd();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let ms = settings_with_policy(McpServerPolicy::single(
             McpServerAllowlist::new(
                 vec![],
@@ -1002,7 +1002,7 @@ headers = { "X-A" = "1", "X-B" = "2", "X-C" = "3" }
             "https://ok.example.com/mcp",
         );
         let cwd = empty_cwd();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let ms = settings_with_policy(McpServerPolicy::single(
             McpServerAllowlist::new(
                 vec![],
@@ -1095,7 +1095,7 @@ headers = { "X-A" = "1", "X-B" = "2", "X-C" = "3" }
             }}"#,
         )
         .unwrap();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let merge = |ms: &ManagedSettings| {
             let merged =
                 merge_managed_mcp_servers_with_policy_from(vec![], cwd.path(), None, &compat, ms);
@@ -1481,7 +1481,7 @@ enabled = false
         )
         .unwrap();
 
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let merged = merge_managed_mcp_servers(vec![], cwd.path(), None, &compat);
         assert!(
             !merged.iter().any(|server| matches!(
@@ -1520,7 +1520,7 @@ Authorization = "Bearer org2-token"
     #[test]
     fn same_url_different_names_both_survive_merge() {
         let cwd = same_url_project_repo();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let merged = merge_managed_mcp_servers(vec![], cwd.path(), None, &compat);
 
         let auth_header = |name: &str| -> &str {
@@ -1545,7 +1545,7 @@ Authorization = "Bearer org2-token"
     #[test]
     fn same_url_different_names_both_sourced_from_toml() {
         let cwd = same_url_project_repo();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let sourced = merge_managed_mcp_servers_sourced(cwd.path(), None, &compat);
 
         for name in ["gb5207-org1", "gb5207-org2"] {
@@ -1572,7 +1572,7 @@ Authorization = "Bearer org2-token"
             .unwrap();
             cwd
         }
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
 
         let untrusted = repo_with_project_server();
         crate::agent::folder_trust::record_for_test(untrusted.path(), false);
@@ -1608,7 +1608,7 @@ Authorization = "Bearer org2-token"
 
         let cwd = empty_cwd();
         write_cursor_project_mcp(cwd.path(), "projsrv");
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let inputs = McpDiscoveryInputs {
             cwd: cwd.path(),
             plugin_registry: None,
@@ -1645,7 +1645,7 @@ Authorization = "Bearer org2-token"
             "https://plug.example.test/mcp",
         );
         let cwd = empty_cwd();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
 
         let merged = merge_managed_mcp_servers(vec![], cwd.path(), Some(&registry), &compat);
         assert!(
@@ -1722,7 +1722,7 @@ Authorization = "Bearer org2-token"
         let registry = PluginRegistry::from_discovered(vec![dp], &[], &["sentry".to_string()]);
 
         let cwd = tempfile::tempdir().unwrap();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let sourced = merge_managed_mcp_servers_sourced(cwd.path(), Some(&registry), &compat);
 
         let sentry_count = sourced
@@ -1790,7 +1790,7 @@ Authorization = "Bearer org2-token"
         let registry = PluginRegistry::from_discovered(vec![dp], &[], &["sentry".to_string()]);
 
         let cwd = tempfile::tempdir().unwrap();
-        let compat = cortex_tools::types::compat::CompatConfig::default();
+        let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
         let sourced = merge_managed_mcp_servers_sourced(cwd.path(), Some(&registry), &compat);
 
         let sentry: Vec<&acp::McpServer> = sourced

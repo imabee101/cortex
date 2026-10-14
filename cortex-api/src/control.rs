@@ -21,7 +21,8 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::API_KEY_PREFIX;
+use crate::auth::{AuthUser, Caller};
 use crate::db::DbError;
 use crate::{AppState, CLIENT_ID, ISSUER};
 
@@ -69,7 +70,6 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
          cortex_api_inference_waiting {}\n\
          cortex_api_inference_rejected_total {}\n\
          cortex_api_loops_aborted_total {}\n\
-         cortex_api_reasoning_overruns_total {}\n\
          cortex_api_llama_breaker_open {}\n\
          cortex_api_search_breaker_open {}\n",
         state.requests.load(Relaxed),
@@ -79,7 +79,6 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         state.slots.waiting(),
         state.slots.rejected.load(Relaxed),
         state.loops_aborted.load(Relaxed),
-        state.reasoning_overruns.load(Relaxed),
         u8::from(state.llama_breaker.is_open()),
         u8::from(state.search.breaker.is_open()),
     );
@@ -162,16 +161,21 @@ pub async fn models(State(state): State<AppState>, AuthUser(_user): AuthUser) ->
 }
 
 pub fn model_list(state: &AppState) -> serde_json::Value {
-    json!({
-        "data": [{
-            "id": state.config.model_id,
-            "model": state.config.model_id,
-            "name": state.config.model_id,
-            "context_window": crate::inference::advertised_context_window(state),
-            "api_backend": state.config.api_backend,
-            "supports_backend_search": crate::search::configured(state),
-        }]
-    })
+    let mut model = json!({
+        "id": state.config.model_id,
+        "model": state.config.model_id,
+        "name": state.config.model_id,
+        "context_window": crate::inference::context_window(state),
+        "api_backend": state.config.api_backend,
+        "supports_backend_search": crate::search::configured(state),
+    });
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        let menu = budgets.menu_for(&state.config.api_backend);
+        if menu.as_array().is_some_and(|items| !items.is_empty()) {
+            model["reasoning_efforts"] = menu;
+        }
+    }
+    json!({ "data": [model] })
 }
 
 pub async fn subagent_bundle(AuthUser(_user): AuthUser) -> impl IntoResponse {
@@ -421,14 +425,28 @@ pub async fn root() -> impl IntoResponse {
     "cortex-api\n"
 }
 
-/// Probe for a first-party API key. Credentials the server does not accept are a
-/// 401 through the extractor, so the client then leaves the key unadvertised.
-pub async fn api_key_info(AuthUser(_user): AuthUser) -> impl IntoResponse {
+/// The client probes its API key here before advertising it. A revoked or unknown key is a 401
+/// through the extractor; a live key answers with its record. There are no teams and no per-key
+/// blocking in this deployment, so a live key is never blocked or disabled.
+pub async fn api_key_info(Caller { user, api_key }: Caller) -> Response {
+    let Some(key) = api_key else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "this endpoint describes the API key the request was made with"})),
+        )
+            .into_response();
+    };
     Json(json!({
+        "api_key_id": key.id,
+        "name": key.name,
+        "redacted_api_key": format!("{API_KEY_PREFIX}…{}", key.key_suffix),
+        "user_id": user,
+        "create_time": key.created_at,
         "api_key_blocked": false,
         "api_key_disabled": false,
         "team_blocked": false,
     }))
+    .into_response()
 }
 
 /// Usage against the daily inference allowance, in the credits shape the `/usage`

@@ -84,7 +84,7 @@ fn discover_hook_source_paths_includes_claude_when_marker_unset() {
     let _g = MarkerGuard;
     refresh_marker_cache(false);
     let dir = tempfile::tempdir().unwrap();
-    let compat = cortex_tools::types::compat::CompatConfig::default();
+    let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
     let paths = source_paths(dir.path(), &compat);
     let project_strs = source_path_strs(&paths.project);
     assert!(
@@ -96,11 +96,32 @@ fn discover_hook_source_paths_includes_claude_when_marker_unset() {
 
 #[test]
 #[serial]
+fn discover_hook_source_paths_excludes_vendor_hooks_by_default() {
+    let _g = MarkerGuard;
+    refresh_marker_cache(false);
+    let dir = tempfile::tempdir().unwrap();
+    let paths = source_paths(
+        dir.path(),
+        &cortex_tools::types::compat::CompatConfig::default(),
+    );
+    let all = source_path_strs(&paths.global)
+        .into_iter()
+        .chain(source_path_strs(&paths.project))
+        .collect::<Vec<_>>();
+    assert!(
+        all.iter()
+            .all(|s| !s.contains(".claude") && !s.contains(".cursor")),
+        "vendor hook sources load only when their cell is on; got {all:?}"
+    );
+}
+
+#[test]
+#[serial]
 fn discover_hook_source_paths_includes_cursor_hooks_json() {
     let _g = MarkerGuard;
     refresh_marker_cache(false);
     let dir = tempfile::tempdir().unwrap();
-    let compat = cortex_tools::types::compat::CompatConfig::default();
+    let compat = cortex_tools::types::compat::CompatConfig::all_enabled();
     let paths = source_paths(dir.path(), &compat);
     let global_strs = source_path_strs(&paths.global);
     assert!(

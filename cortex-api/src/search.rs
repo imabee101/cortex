@@ -318,11 +318,9 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
     let url = format!("{}/v1/responses", origin.trim_end_matches('/'));
     let mut payload = payload.clone();
     inference::demote_late_system(&mut payload);
-    inference::cap_output(
-        &mut payload,
-        "max_output_tokens",
-        state.config.max_output_tokens,
-    );
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        budgets.apply("/v1/responses", &mut payload);
+    }
     let mut request = state.http.post(url).json(&payload);
     if let Some(key) = state
         .config
@@ -356,7 +354,12 @@ async fn post_llama(state: &AppState, origin: &str, payload: &Value) -> Result<V
         .map(str::to_owned);
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return Err(passthrough(status, retry_after.as_deref(), bytes));
+        let window = crate::inference::reported_window(state, Some(&bytes));
+        let mut response = passthrough(status, retry_after.as_deref(), bytes);
+        response
+            .headers_mut()
+            .insert(crate::inference::CONTEXT_WINDOW_HEADER, window);
+        return Err(response);
     }
     upstream
         .json()

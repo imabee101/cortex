@@ -64,17 +64,17 @@ Hooks are discovered from several places (all are merged):
 | Scope | Path | Trusted? | Notes |
 |-------|------|----------|-------|
 | Global | `~/.cortex/hooks/*.json` | Always | Personal hooks |
-| Global | `~/.claude/settings.json` (and `settings.local.json`) | Always | Claude Code compatibility (configurable) |
-| Global | `~/.cursor/hooks.json` | Always | Cursor compatibility (configurable) |
+| Global | `~/.claude/settings.json` (and `settings.local.json`) | Always | Only with `[compat.claude] hooks = true` |
+| Global | `~/.cursor/hooks.json` | Always | Only with `[compat.cursor] hooks = true` |
 | Project | `<project>/.cortex/hooks/*.json` | Requires trust | Per-repo automation |
-| Project | `<project>/.claude/settings.json` (and `settings.local.json`) | Requires trust | Claude compatibility (configurable) |
-| Project | `<project>/.cursor/hooks.json` | Requires trust | Cursor compatibility (configurable) |
+| Project | `<project>/.claude/settings.json` (and `settings.local.json`) | Requires trust | Only with `[compat.claude] hooks = true` |
+| Project | `<project>/.cursor/hooks.json` | Requires trust | Only with `[compat.cursor] hooks = true` |
 | Config | `~/.cortex/config.toml` | Always | Your hooks alongside the rest of your config |
 | Config | `managed_config.toml` (`$CORTEX_HOME` and `/etc/cortex`) | Always | Organization-distributed hooks (server-synced and on-device) |
 | Config | `requirements.toml` (signed cache, and `/etc/cortex`) | Always | Organization-enforced hooks; see [Enforced hooks](#enforced-hooks) |
 | Plugin | Bundled inside installed plugins | Per-plugin | Shared team hooks |
 
-Config-file hooks live in the same TOML your organization already controls; see [Hooks in Config Files](#hooks-in-config-files) for the format. The compatible vendor hook sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] hooks = false` in `~/.cortex/config.toml` or the corresponding environment variable. See [Configuration](05-configuration.md#harness-compatibility) for details.
+Config-file hooks live in the same TOML your organization already controls; see [Hooks in Config Files](#hooks-in-config-files) for the format. Vendor hook sources are not scanned by default. To load a vendor's hooks, set `[compat.<vendor>] hooks = true` in `~/.cortex/config.toml` or the corresponding environment variable. See [Configuration](05-configuration.md#harness-compatibility) for details.
 
 **Trusting a project**: The first time you open a project with hooks, you must trust it before its project hooks will run; until then they are silently skipped. Grant trust by running `/hooks-trust` (or launching with `--trust`); the decision is recorded in the unified folder-trust store (`~/.cortex/trusted_folders.toml`), the same gate that governs repo-local MCP/LSP servers. Global hooks in `~/.cortex/hooks/` are always trusted and need no entry. This prevents untrusted repos from running arbitrary code.
 

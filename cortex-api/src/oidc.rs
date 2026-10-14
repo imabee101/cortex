@@ -741,12 +741,21 @@ async fn open_session(
 }
 
 async fn session_user(state: &AppState, headers: &HeaderMap) -> Option<uuid::Uuid> {
+    browser_session(state, headers).await.map(|(user, _)| user)
+}
+
+/// The signed-in browser's user and session id, from the `session` cookie.
+pub(crate) async fn browser_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<(uuid::Uuid, String)> {
     let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     let id = cookie.split(';').find_map(|part| {
         let part = part.trim();
         part.strip_prefix("session=")
     })?;
-    state.db.session_user(id).await.ok().flatten()
+    let user = state.db.session_user(id).await.ok().flatten()?;
+    Some((user, id.to_owned()))
 }
 
 pub fn allowed_redirect(uri: &str) -> bool {
@@ -777,7 +786,10 @@ fn see_other(cookie: axum::http::HeaderValue, next: &str, title: &str) -> Respon
 }
 
 fn safe_next(next: &str) -> bool {
-    (next.starts_with("/authorize?") || next.starts_with("/device?") || next == "/authorize")
+    (next.starts_with("/authorize?")
+        || next.starts_with("/device?")
+        || next == "/authorize"
+        || next == crate::api_keys::CONSOLE_PATH)
         && !next.contains("://")
         && !next.contains('\\')
 }
@@ -811,7 +823,7 @@ fn redirect_error(uri: &str, state: &str, error: &str) -> Response {
     Redirect::to(&format!("{uri}?error={}&state={}", enc(error), enc(state))).into_response()
 }
 
-fn html(status: StatusCode, body: String) -> Response {
+pub(crate) fn html(status: StatusCode, body: String) -> Response {
     (status, HtmlPage(body)).into_response()
 }
 

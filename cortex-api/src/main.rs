@@ -15,15 +15,6 @@ struct Args {
     database_url: String,
     #[arg(long, env = "CORTEX_API_CONTEXT_WINDOW", default_value_t = 98304)]
     context_window: u64,
-    /// Share of the context window `/v1/models` reports. The harness sizes its conversation at
-    /// bytes/4 and never reads the server's token count, which runs about twice that on code.
-    #[arg(
-        long,
-        env = "CORTEX_API_CONTEXT_PERCENT",
-        default_value_t = 40,
-        value_parser = clap::value_parser!(u64).range(1..=100)
-    )]
-    context_percent: u64,
     #[arg(long, env = "CORTEX_API_MODEL", default_value = "Qwen3.5-9B")]
     model: String,
     #[arg(
@@ -67,13 +58,13 @@ struct Args {
     queue_max: usize,
     #[arg(long, env = "CORTEX_API_QUEUE_WAIT_SECS", default_value_t = 30)]
     queue_wait_secs: u64,
-    /// Ceiling on generated tokens per request; 0 leaves requests unbounded.
-    #[arg(long, env = "CORTEX_API_MAX_OUTPUT_TOKENS", default_value_t = 24576)]
-    max_output_tokens: u64,
     #[arg(long, env = "CORTEX_API_IP_RATE_PER_MIN", default_value_t = 1200)]
     ip_rate_per_min: u32,
     #[arg(long, env = "CORTEX_API_USER_RATE_PER_MIN", default_value_t = 1200)]
     user_rate_per_min: u32,
+    /// Live API keys one account may hold.
+    #[arg(long, env = "CORTEX_API_KEY_LIMIT", default_value_t = 25)]
+    api_key_limit: i64,
     #[arg(long, env = "CORTEX_API_INFERENCE_PER_MIN", default_value_t = 120)]
     inference_per_min: u32,
     #[arg(long, env = "CORTEX_API_DAILY_INFERENCE_QUOTA", default_value_t = 5000)]
@@ -88,6 +79,12 @@ struct Args {
     telemetry_retention_days: i32,
     #[arg(long, env = "CORTEX_API_DRAIN_SECS", default_value_t = 900)]
     drain_secs: u64,
+    /// Thinking budget per reasoning level, `level=tokens,...`; unset leaves reasoning unbounded.
+    #[arg(long, env = "CORTEX_API_REASONING_BUDGETS")]
+    reasoning_budgets: Option<String>,
+    /// The level the harness selects unless the user picks another; must be among the budgets.
+    #[arg(long, env = "CORTEX_API_REASONING_DEFAULT", default_value = "medium")]
+    reasoning_default: String,
 }
 
 /// SIGINT from a terminal, SIGTERM from the service manager.
@@ -112,7 +109,6 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut config = cortex_api::Config::new(args.listen, args.database_url);
     config.context_window = args.context_window;
-    config.context_percent = args.context_percent;
     config.model_id = args.model;
     config.api_backend = args.api_backend;
     config.release_version = args.release_version;
@@ -138,14 +134,30 @@ async fn main() -> anyhow::Result<()> {
     config.parallel = args.parallel;
     config.queue_max = args.queue_max;
     config.queue_wait_secs = args.queue_wait_secs;
-    config.max_output_tokens = args.max_output_tokens;
     config.ip_rate_per_min = args.ip_rate_per_min;
     config.user_rate_per_min = args.user_rate_per_min;
+    config.api_key_limit = args.api_key_limit;
     config.inference_per_min = args.inference_per_min;
     config.daily_inference_quota = args.daily_inference_quota;
     config.daily_search_quota = args.daily_search_quota;
     config.telemetry_retention_days = args.telemetry_retention_days;
     config.drain_secs = args.drain_secs;
+    config.reasoning_budgets = args
+        .reasoning_budgets
+        .filter(|spec| !spec.trim().is_empty())
+        .map(|spec| cortex_api::ReasoningBudgets::parse(&spec, &args.reasoning_default))
+        .transpose()
+        .map_err(|err| anyhow::anyhow!(err))?;
+    if config.api_backend == "messages"
+        && config
+            .reasoning_budgets
+            .as_ref()
+            .is_some_and(cortex_api::ReasoningBudgets::rejected_on_messages)
+    {
+        return Err(anyhow::anyhow!(
+            "reasoning level `minimal` cannot be set on the messages backend: the harness never sends it"
+        ));
+    }
     config.props_wait_tries = 90;
     let drain = std::time::Duration::from_secs(config.drain_secs);
     let running = cortex_api::serve(config).await?;

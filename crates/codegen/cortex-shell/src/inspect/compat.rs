@@ -200,12 +200,12 @@ mod tests {
         let report = resolve_without_env(Some(&effective_config));
 
         assert!(!report.remote_settings_loaded);
-        assert_eq!(report.cells.len(), 13);
+        assert_eq!(report.cells.len(), 15);
         assert!(
             report
                 .cells
                 .iter()
-                .all(|cell| cell.enabled && cell.source == CompatSource::Default)
+                .all(|cell| !cell.enabled && cell.source == CompatSource::Default)
         );
         assert_eq!(
             report
@@ -229,7 +229,7 @@ mod tests {
             serde_json::json!({
                 "vendor": "codex",
                 "surface": "sessions",
-                "enabled": true,
+                "enabled": false,
                 "source": "default"
             })
         );
@@ -250,7 +250,7 @@ mod tests {
         assert!(!rules.enabled);
         assert_eq!(rules.source, CompatSource::Config);
         let agents = entry(&report, "cursor", "agents");
-        assert!(agents.enabled);
+        assert!(!agents.enabled);
         assert_eq!(agents.source, CompatSource::Default);
     }
 

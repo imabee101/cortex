@@ -601,6 +601,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("CORTEX_HOME", home.path());
         let _flag = EnvGuard::unset("CORTEX_FOLDER_TRUST");
+        let _claude_settings = EnvGuard::set("CORTEX_CLAUDE_SETTINGS_ENABLED", "1");
         let tmp = repo_tmp();
         let claude = tmp.path().join(".claude");
         std::fs::create_dir_all(&claude).unwrap();
@@ -642,6 +643,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("CORTEX_HOME", home.path());
         let _flag = EnvGuard::unset("CORTEX_FOLDER_TRUST");
+        let _claude_settings = EnvGuard::set("CORTEX_CLAUDE_SETTINGS_ENABLED", "1");
         let tmp = repo_tmp();
         let subdir = tmp.path().join("sub");
         let claude = subdir.join(".claude");

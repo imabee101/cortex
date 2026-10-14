@@ -212,16 +212,15 @@ async fn phase4_inventory_routes() {
             .status(),
         401
     );
-    let key: Value = http
+    // The probe describes the API key a request was made with; a session token has none.
+    // The key path itself is covered in tests/api_keys.rs.
+    let key = http
         .get(format!("{base}/v1/api-key"))
         .bearer_auth(&access)
         .send()
         .await
-        .expect("key")
-        .json()
-        .await
-        .expect("key json");
-    assert_eq!(key["api_key_blocked"], false);
+        .expect("key");
+    assert_eq!(key.status(), 400);
     let billing: Value = http
         .get(format!("{base}/v1/billing?format=credits"))
         .bearer_auth(&access)
@@ -346,21 +345,62 @@ async fn phase4_inventory_routes() {
         .await
         .expect("tokens json");
     assert_eq!(tokens["token_ids"].as_array().expect("ids").len(), 3);
-    let images = http
-        .post(format!("{base}/v1/images/generations"))
-        .bearer_auth(&access)
-        .json(&json!({}))
-        .send()
+    // No image, video or speech generation model: each call is answered with that fact in the shape the
+    // client reports, inside the 200 characters the image tools keep.
+    for (method, path) in [
+        (reqwest::Method::POST, "/v1/images/generations"),
+        (reqwest::Method::POST, "/v1/images/edits"),
+        (reqwest::Method::POST, "/v1/videos/generations"),
+        (reqwest::Method::GET, "/v1/videos/req-1"),
+    ] {
+        let anonymous = http
+            .request(method.clone(), format!("{base}{path}"))
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("media");
+        assert_eq!(anonymous.status(), 401, "{path}");
+        let media = http
+            .request(method, format!("{base}{path}"))
+            .bearer_auth(&access)
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("media");
+        assert_eq!(media.status(), 501, "{path}");
+        let body = media.text().await.expect("media body");
+        let shown: String = body.chars().take(200).collect();
+        let error: Value = serde_json::from_str(&shown).expect("whole error within 200 characters");
+        assert_eq!(
+            error["error"]["message"],
+            "this server has no image or video generation model"
+        );
+    }
+    let anonymous_voice = format!("ws://{}/v1/stt", base.trim_start_matches("http://"))
+        .into_client_request()
+        .expect("request");
+    match connect_async(anonymous_voice).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 401);
+        }
+        other => panic!("anonymous dictation was accepted: {:?}", other.map(|_| ())),
+    }
+    let mut voice = stt(&base, &access).await;
+    let event: Value = serde_json::from_str(&next_text(&mut voice).await).expect("stt event");
+    assert_eq!(
+        event,
+        json!({"type": "error", "message": "this server has no speech-to-text model"})
+    );
+    let closing = tokio::time::timeout(Duration::from_secs(5), voice.next())
         .await
-        .expect("images");
-    assert_eq!(images.status(), 404);
-    let voice = http
-        .get(format!("{base}/v1/stt"))
-        .bearer_auth(&access)
-        .send()
-        .await
-        .expect("voice");
-    assert_eq!(voice.status(), 404);
+        .expect("timeout");
+    assert!(
+        matches!(
+            closing,
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None
+        ),
+        "{closing:?}"
+    );
 
     let models: Value = http
         .get(format!("{base}/v1/models"))
@@ -371,7 +411,7 @@ async fn phase4_inventory_routes() {
         .json()
         .await
         .expect("models json");
-    assert_eq!(models["data"][0]["context_window"], 1638);
+    assert_eq!(models["data"][0]["context_window"], 4096);
     assert_eq!(models["data"][0]["supports_backend_search"], true);
 
     let missing = http
@@ -925,6 +965,26 @@ async fn ws(
     request
         .headers_mut()
         .insert("x-cortex-token-auth", "cortex-cli".parse().expect("header"));
+    let (socket, _) = connect_async(request).await.expect("websocket");
+    socket
+}
+
+/// Opens the dictation socket the way the voice client does: a bearer and its client identifier, without the
+/// `x-cortex-token-auth` marker the other requests carry.
+async fn stt(
+    base: &str,
+    bearer: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let url = format!("ws://{}/v1/stt", base.trim_start_matches("http://"));
+    let mut request = url.into_client_request().expect("request");
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {bearer}").parse().expect("auth"),
+    );
+    request.headers_mut().insert(
+        "x-cortex-client-identifier",
+        "cortex-shell".parse().expect("header"),
+    );
     let (socket, _) = connect_async(request).await.expect("websocket");
     socket
 }

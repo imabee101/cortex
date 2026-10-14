@@ -506,9 +506,9 @@ async fn resolve_permissions_with_provenance_inner(
         UserDefaultModeLoad::Apply
     };
 
-    // Phase 2 cutoff: skip the .claude/ fallback once the user has imported.
+    // Claude settings files apply only when the user turned them on and has not imported them.
     // Native config-derived permissions still apply.
-    let skip_claude = is_claude_import_marked_with_log("resolve_permissions_with_provenance");
+    let skip_claude = !claude_settings_in_use("resolve_permissions_with_provenance");
     let settings_json = if skip_claude {
         None
     } else {

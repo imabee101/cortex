@@ -569,7 +569,7 @@ async fn list_instructions(
 ) -> Vec<InstructionFile> {
     let configs = cortex_agent::prompt::agents_md::read_agents_config_with_paths(
         &cwd.display().to_string(),
-        cortex_agent::prompt::skills::CompatConfig::default(),
+        cortex_agent::prompt::skills::CompatConfig::all_enabled(),
         paths,
         project_trusted,
     )
@@ -817,7 +817,7 @@ fn list_hooks(
     project_trusted: bool,
     discovered_plugins: &[cortex_agent::plugins::DiscoveredPlugin],
 ) -> Vec<HookEntry> {
-    let all_on = cortex_tools::types::compat::CompatConfig::default();
+    let all_on = cortex_tools::types::compat::CompatConfig::all_enabled();
     // Route through the same assembly as session startup
     // Config-layer hooks (config.toml / managed_config.toml / requirements.toml) then appear in `/hooks` status alongside file hooks
     // Each carries its provenance name prefix
@@ -918,7 +918,7 @@ async fn list_skills(
         Some(&cwd.display().to_string()),
         skills_config,
         Some(plugin_registry),
-        cortex_agent::prompt::skills::CompatConfig::default(),
+        cortex_agent::prompt::skills::CompatConfig::all_enabled(),
         project_trusted,
     )
     .await;
@@ -1075,7 +1075,7 @@ fn list_mcp_servers(
 ) -> Vec<McpServerEntry> {
     use cortex_workspace::permission::resolution;
 
-    let all_on = cortex_tools::types::compat::CompatConfig::default();
+    let all_on = cortex_tools::types::compat::CompatConfig::all_enabled();
     let sourced = crate::session::managed_mcp::merge_managed_mcp_servers_sourced(
         cwd,
         Some(plugin_registry),
@@ -1854,13 +1854,13 @@ mod tests {
     #[test]
     fn harness_compatibility_human_output_stays_compact() {
         let effective_config: toml::Value =
-            toml::from_str("[compat.cursor]\nrules = false").unwrap();
+            toml::from_str("[compat.cursor]\nrules = true").unwrap();
         let report = compat::resolve_inspect_compat_with_env(Some(&effective_config), |_| None);
 
         let human = render_harness_compatibility(&report);
 
-        assert!(human.contains("skills     on   (default)"), "{human}");
-        assert!(human.contains("rules      OFF  (config)"), "{human}");
+        assert!(human.contains("skills     OFF  (default)"), "{human}");
+        assert!(human.contains("rules      on   (config)"), "{human}");
         assert!(
             !human.contains("Defaults shown; remote may override."),
             "{human}"

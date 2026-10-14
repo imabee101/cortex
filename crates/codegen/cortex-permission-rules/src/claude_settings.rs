@@ -403,10 +403,10 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Merge Claude settings `env`, later keys overriding earlier (cwd highest, `settings.local.json` over `settings.json`).
-/// Repo-tree `env` is injected into every spawned subprocess, so it is dropped unless `project_trusted`; user `~/.claude` env is always loaded.
+/// Read only when the user turned on `[compat.claude] settings`. Repo-tree `env` is injected into every spawned
+/// subprocess, so it is dropped unless `project_trusted`; user `~/.claude` env loads whenever the cell is on.
 pub fn load_claude_env_with_project(cwd: &Path, project_trusted: bool) -> HashMap<String, String> {
-    // Phase 2 cutoff: if the user has imported, skip reading .claude/ at runtime.
-    if is_claude_import_marked_with_log("load_claude_env_with_project") {
+    if !claude_settings_in_use("load_claude_env_with_project") {
         return HashMap::new();
     }
 
@@ -433,6 +433,20 @@ pub fn load_claude_env_with_project(cwd: &Path, project_trusted: bool) -> HashMa
 }
 
 // Gate consumers cannot depend on the shell, so this check stays in this crate.
+
+/// Whether Claude settings files feed permissions and env: the user turned on `[compat.claude] settings`
+/// and has not imported them into Cortex (after an import the copied rules are read instead).
+pub(crate) fn claude_settings_in_use(gate_name: &'static str) -> bool {
+    if is_claude_import_marked_with_log(gate_name) {
+        return false;
+    }
+    let effective_config = cortex_config::effective_config::load_effective_config().ok();
+    cortex_config::compat::resolve_compat_claude_settings(
+        effective_config.as_ref(),
+        &cortex_config::compat::CompatEnv::from_process(),
+        None,
+    )
+}
 
 /// True when the user marked Claude settings imported (`[claude_compat].imported` in config.toml, or the test override).
 /// Public so callers that mirror this gate elsewhere use the same check.

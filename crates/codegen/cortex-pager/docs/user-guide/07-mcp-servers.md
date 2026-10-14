@@ -289,7 +289,7 @@ Cortex loads MCP server configurations from multiple sources for compatibility:
 
 All sources are merged in priority order: config.toml > Claude > Cursor > `.mcp.json`. Servers from higher-priority sources take precedence when names conflict.
 
-The Claude and Cursor MCP sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] mcps = false` in `~/.cortex/config.toml` or the corresponding environment variable (`CORTEX_CURSOR_MCPS_ENABLED`, `CORTEX_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `cortex inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
+The Claude and Cursor MCP sources are not scanned by default. To load a vendor's servers, set `[compat.<vendor>] mcps = true` in `~/.cortex/config.toml` or the corresponding environment variable (`CORTEX_CURSOR_MCPS_ENABLED`, `CORTEX_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `cortex inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
 
 ---
 

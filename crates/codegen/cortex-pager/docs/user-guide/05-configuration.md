@@ -397,10 +397,10 @@ disabled = ["wip-skill"]              # skill names to keep listed but inactive
 
 ### Harness compatibility
 
-Control vendor compatibility for Cursor, Claude, and Codex. Every cell defaults to `true`. Session cells stay staged and inert until a foreign-session scanner consumes them, and each tool needs both its `sessions` cell and the matching `resume-claude`, `resume-codex`, or `resume-cursor` skill — a missing skill means zero foreign-session filesystem I/O.
+Control vendor compatibility for Cursor, Claude, and Codex. Every cell defaults to `false`: Cortex reads nothing from another harness until you turn a cell on. Session cells stay staged and inert until a foreign-session scanner consumes them, and each tool needs both its `sessions` cell and the matching `resume-claude`, `resume-codex`, or `resume-cursor` skill — a missing skill means zero foreign-session filesystem I/O.
 
 ```toml
-[compat.cursor]
+[compat.cursor]  # every cell is off unless set
 skills = true     # scan ~/.cursor/skills/ and <cwd>/.cursor/skills/
 rules = true      # scan ~/.cursor/rules/ and <dir>/.cursor/rules/
 agents = true     # scan ~/.cursor/ for named instruction files
@@ -415,6 +415,8 @@ agents = true     # scan ~/.claude/ and <dir>/.claude/CLAUDE*.md
 mcps = true       # scan ~/.claude.json for MCP servers
 hooks = true      # scan ~/.claude/settings.json for hooks
 sessions = true   # staged; no scanner consumer yet
+settings = true   # permission rules and env from ~/.claude and <dir>/.claude settings.json
+plugins = true    # ~/.claude/plugins/, <dir>/.claude/plugins/, Claude marketplaces and installs
 
 [compat.codex]
 sessions = true   # staged; no scanner consumer yet
@@ -424,7 +426,7 @@ Codex's `skills`, `rules`, `agents`, `mcps`, and `hooks` cells are reserved and 
 
 For Claude and Cursor, `rules` and `agents` are independent: turning off named instruction files doesn't disable the home or project rules directory, and turning off rules doesn't disable named files. Claude's `agents` cell gates home-level `~/.claude/` named files and project `<dir>/.claude/CLAUDE*.md`; generic top-level `Claude.md`, `CLAUDE.md`, and `CLAUDE.local.md` stay recognized. Project rule paths are scanned at every directory from the repo root down to the current one.
 
-Each cell can be set via environment variable or `config.toml`; see the environment-variables reference for the names. Resolution: env var > config.toml > default (on).
+Each cell can be set via environment variable or `config.toml`; see the environment-variables reference for the names. Resolution: env var > config.toml > default (off).
 
 `cortex inspect` reports cells that still need session-start resolution as `?` until a value is available; cells with an explicit env or TOML value use that value. Affected discovery entries report `compatibilityStatus: "unresolved"` in JSON and `[compat unresolved]` in human output.
 

@@ -35,6 +35,9 @@ async fn inference_normalizes_llama_shapes() {
     truncate();
     let mut config = cortex_api::Config::new("127.0.0.1:0".parse().expect("addr"), DB.to_owned());
     config.llama_url = Some(llama);
+    config.reasoning_budgets = Some(
+        cortex_api::ReasoningBudgets::parse("low=2048,medium=8192", "medium").expect("budgets"),
+    );
     let running = cortex_api::serve(config).await.expect("serve");
     let base = format!("http://{}", running.addr);
     let http = reqwest::Client::builder()
@@ -107,7 +110,12 @@ async fn inference_normalizes_llama_shapes() {
         .json()
         .await
         .expect("models json");
-    assert_eq!(models["data"][0]["context_window"], 1638);
+    assert_eq!(models["data"][0]["context_window"], 4096);
+    // The harness's effort menu, with the level it selects by default.
+    assert_eq!(
+        models["data"][0]["reasoning_efforts"],
+        json!([{"value": "low", "default": false}, {"value": "medium", "default": true}])
+    );
 
     let chat = http
         .post(format!("{base}/v1/chat/completions"))
@@ -117,6 +125,7 @@ async fn inference_normalizes_llama_shapes() {
         .await
         .expect("chat");
     assert_eq!(chat.status(), 200);
+    assert_eq!(chat.headers()["x-cortex-context-window"], "4096");
     let chat_body = chat.text().await.expect("chat text");
     assert!(
         chat_body.contains("\\\"cmd\\\":\\\"ls\\\"")
@@ -124,11 +133,23 @@ async fn inference_normalizes_llama_shapes() {
     );
     assert!(chat_body.contains("[DONE]"));
 
-    // Every request reaches the model with an output ceiling; a client's own lower limit is kept.
-    assert_eq!(
-        LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst),
-        24576
-    );
+    // An overflow reaches the client as llama-server sent it, reporting half the window so that the client's
+    // own count, which runs below llama's, is over it and the client compacts and resubmits.
+    let overflow = http
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(&json!({"model": "overflow", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .expect("overflow");
+    assert_eq!(overflow.status(), 400);
+    assert_eq!(overflow.headers()["x-cortex-context-window"], "2048");
+    let overflow: Value = overflow.json().await.expect("overflow json");
+    assert_eq!(overflow["error"]["type"], "exceed_context_size_error");
+
+    // No output limit is added: a reply ends when the model stops or the context is full, which is
+    // what the harness assumes of a length finish. A limit the client sets itself is passed on.
+    assert_eq!(LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst), 0);
     http.post(format!("{base}/v1/chat/completions"))
         .bearer_auth(access)
         .json(&json!({"model": "m", "max_tokens": 77, "messages": [{"role": "user", "content": "hi"}]}))
@@ -142,6 +163,33 @@ async fn inference_normalizes_llama_shapes() {
         LAST_MAX_TOKENS.load(std::sync::atomic::Ordering::SeqCst),
         77
     );
+
+    // llama-server receives the thinking budget of the level the harness sent, and the default
+    // level's budget when the request names no level.
+    for (body, budget) in [
+        (
+            json!({"model": "m", "reasoning_effort": "low", "messages": [{"role": "user", "content": "hi"}]}),
+            2048,
+        ),
+        (
+            json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+            8192,
+        ),
+    ] {
+        http.post(format!("{base}/v1/chat/completions"))
+            .bearer_auth(access)
+            .json(&body)
+            .send()
+            .await
+            .expect("chat budget")
+            .bytes()
+            .await
+            .expect("chat budget body");
+        assert_eq!(
+            LAST_REASONING_BUDGET.load(std::sync::atomic::Ordering::SeqCst),
+            budget
+        );
+    }
 
     // A generation that only repeats itself is cut, the slot comes back, and the upstream is dropped.
     let looping = http
@@ -183,33 +231,12 @@ async fn inference_normalizes_llama_shapes() {
         "{metrics}"
     );
 
-    // The output ceiling ending a generation that never left its reasoning is a broken stream the
-    // client retries; the same finish after an answer, or under the client's own limit, is not.
-    let overrun = http
-        .post(format!("{base}/v1/chat/completions"))
-        .bearer_auth(access)
-        .json(&json!({"model": "overrun", "stream": true, "messages": [{"role": "user", "content": "hi"}]}))
-        .send()
-        .await
-        .expect("overrun");
-    assert_eq!(overrun.status(), 200);
-    assert!(
-        overrun.bytes().await.is_err(),
-        "a reasoning-only generation cut by our ceiling must end in an error the client retries"
-    );
-    for (model, extra) in [
-        ("longanswer", json!({})),
-        ("overrun", json!({"max_tokens": 77})),
-    ] {
-        let mut request = json!({"model": model, "stream": true, "messages": [{"role": "user", "content": "hi"}]});
-        request
-            .as_object_mut()
-            .expect("object")
-            .extend(extra.as_object().expect("object").clone());
+    // A length finish, with or without an answer, passes through untouched.
+    for model in ["longanswer", "reasoningonly"] {
         let kept = http
             .post(format!("{base}/v1/chat/completions"))
             .bearer_auth(access)
-            .json(&request)
+            .json(&json!({"model": model, "stream": true, "messages": [{"role": "user", "content": "hi"}]}))
             .send()
             .await
             .expect("kept")
@@ -221,18 +248,99 @@ async fn inference_normalizes_llama_shapes() {
             "{model}: {kept}"
         );
     }
-    let metrics = http
-        .get(format!("{base}/metrics"))
+
+    // The served model has no vision: images in any shape get the coded rejection the client
+    // recovers from (drop the image, resend), and never reach llama.
+    let png = "data:image/png;base64,iVBORw0KGgo=";
+    for (path, body) in [
+        (
+            "chat/completions",
+            json!({"model": "m", "messages": [{"role": "tool", "tool_call_id": "t", "content": [
+                {"type": "text", "text": "file"},
+                {"type": "image_url", "image_url": {"url": png}}]}]}),
+        ),
+        (
+            "responses",
+            json!({"model": "m", "input": [{"role": "user", "content": [
+                {"type": "input_image", "image_url": png}]}]}),
+        ),
+        (
+            "messages",
+            json!({"model": "m", "messages": [{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}]}),
+        ),
+    ] {
+        let before = UPSTREAM_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        let rejected = http
+            .post(format!("{base}/v1/{path}"))
+            .bearer_auth(access)
+            .json(&body)
+            .send()
+            .await
+            .expect("image request");
+        assert_eq!(rejected.status(), 400, "{path}");
+        let error: Value = rejected.json().await.expect("error json");
+        assert_eq!(error["error"]["code"], "invalid_image", "{path}");
+        assert_eq!(
+            UPSTREAM_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "{path} reached llama"
+        );
+    }
+    // A call forced to one function reaches llama in the string form it honors.
+    let tool = |name: &str| json!({"type": "function", "function": {"name": name, "parameters": {"type": "object"}}});
+    http.post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(
+            &json!({"model": "forced", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [tool("session_title"), tool("other")],
+            "tool_choice": {"type": "function", "function": {"name": "session_title"}}}),
+        )
         .send()
         .await
-        .expect("metrics")
-        .text()
+        .expect("forced")
+        .bytes()
         .await
-        .expect("metrics text");
-    assert!(
-        metrics.contains("cortex_api_reasoning_overruns_total 1"),
-        "{metrics}"
-    );
+        .expect("forced body");
+    let sent = LAST_TOOLING.lock().expect("lock").clone();
+    assert_eq!(sent["tool_choice"], "required");
+    assert_eq!(sent["tools"], json!([tool("session_title")]));
+
+    // A tool schema that names an image property is not image content.
+    let schema = http
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(access)
+        .json(
+            &json!({"model": "m", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters":
+                {"type": "object", "properties": {"image": {"type": "image"}}}}}]}),
+        )
+        .send()
+        .await
+        .expect("schema");
+    assert_eq!(schema.status(), 200);
+
+    // A client that stops sending its body mid-request (the harness cancelling a side call at shutdown) is
+    // answered 499, not counted as a request the server refused.
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::TcpStream::connect(running.addr)
+            .await
+            .expect("connect");
+        socket
+            .write_all(
+                format!(
+                    "POST /v1/chat/completions HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {access}\r\ncontent-type: application/json\r\ncontent-length: 1000\r\n\r\n{{\"model\":"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write");
+        socket.shutdown().await.expect("half-close");
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer).await.expect("read");
+        assert!(answer.starts_with("HTTP/1.1 499"), "{answer}");
+    }
 
     let responses = http
         .post(format!("{base}/v1/responses"))
@@ -283,7 +391,10 @@ async fn props() -> impl IntoResponse {
     Json(json!({"default_generation_settings": {"n_ctx": 4096}}))
 }
 
+static LAST_TOOLING: std::sync::Mutex<Value> = std::sync::Mutex::new(Value::Null);
+static UPSTREAM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LAST_MAX_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_REASONING_BUDGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LOOP_DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct DropFlag;
@@ -294,6 +405,7 @@ impl Drop for DropFlag {
 }
 
 async fn chat(request: Request) -> axum::response::Response {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
         .await
         .unwrap_or_default();
@@ -302,6 +414,22 @@ async fn chat(request: Request) -> axum::response::Response {
         payload["max_tokens"].as_u64().unwrap_or(0),
         std::sync::atomic::Ordering::SeqCst,
     );
+    LAST_REASONING_BUDGET.store(
+        payload["reasoning_budget_tokens"].as_u64().unwrap_or(0),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    if payload["model"] == "overflow" {
+        // llama-server's own answer to a prompt longer than its context.
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code": 400, "message": "request (5000 tokens) exceeds the available context size (4096 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 5000, "n_ctx": 4096}})),
+        )
+            .into_response();
+    }
+    if payload["model"] == "forced" {
+        *LAST_TOOLING.lock().expect("lock") =
+            json!({"tool_choice": payload["tool_choice"], "tools": payload["tools"]});
+    }
     if payload["model"] == "loop" {
         // Never ends on its own: the same sentence for as long as the client listens.
         let endless = futures_util::stream::unfold(DropFlag, |flag| async move {
@@ -315,8 +443,8 @@ async fn chat(request: Request) -> axum::response::Response {
         )
             .into_response();
     }
-    if payload["model"] == "overrun" || payload["model"] == "longanswer" {
-        let field = if payload["model"] == "overrun" {
+    if payload["model"] == "reasoningonly" || payload["model"] == "longanswer" {
+        let field = if payload["model"] == "reasoningonly" {
             "reasoning_content"
         } else {
             "content"
@@ -344,6 +472,7 @@ async fn chat(request: Request) -> axum::response::Response {
 }
 
 async fn responses(request: Request) -> impl IntoResponse {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _ = axum::body::to_bytes(request.into_body(), 1024 * 1024).await;
     (
         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
@@ -352,6 +481,7 @@ async fn responses(request: Request) -> impl IntoResponse {
 }
 
 async fn messages(request: Request) -> axum::response::Response {
+    UPSTREAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
         .await
         .unwrap_or_default();

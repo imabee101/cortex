@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_ENCODING;
@@ -33,8 +34,12 @@ pub async fn chat(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     forward(&state, user, "/v1/chat/completions", headers, body).await
 }
 
@@ -42,10 +47,21 @@ pub async fn responses(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     match crate::search::maybe(&state, user, &headers, &body).await {
-        crate::search::Outcome::Answer(response) => response,
+        crate::search::Outcome::Answer(response) => {
+            let window = response
+                .headers()
+                .get(CONTEXT_WINDOW_HEADER)
+                .cloned()
+                .unwrap_or_else(|| reported_window(&state, None));
+            with_window(response, window)
+        }
         crate::search::Outcome::Rewritten(body) => {
             let mut headers = headers;
             headers.remove(CONTENT_ENCODING);
@@ -250,8 +266,12 @@ pub async fn messages(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let body = match received(body) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
     forward(&state, user, "/v1/messages", headers, body).await
 }
 
@@ -321,10 +341,32 @@ pub fn context_window(state: &AppState) -> u64 {
     }
 }
 
-/// The window the harness is told about. It counts bytes/4 against this number and never reads the
-/// server's token count, which runs about twice that on code, so the real window is scaled down.
-pub fn advertised_context_window(state: &AppState) -> u64 {
-    (context_window(state).saturating_mul(state.config.context_percent) / 100).max(1)
+pub(crate) const CONTEXT_WINDOW_HEADER: &str = "x-cortex-context-window";
+
+/// The window every upstream inference response reports in `x-cortex-context-window`. A success reports the
+/// real window, which the client adopts when it is larger than its own. On llama-server's overflow error the
+/// client compacts and resubmits only when its token count is over the reported window, and it counts what
+/// was added since the last response at 4 bytes a token, below llama's count for code. So an overflow reports
+/// half the window: under the client's count unless one turn's output was under-counted by half the window.
+/// The client keeps that window until the next success restores the real one.
+pub(crate) fn reported_window(
+    state: &AppState,
+    error_body: Option<&[u8]>,
+) -> axum::http::HeaderValue {
+    let window = context_window(state);
+    let overflow = error_body
+        .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+        .is_some_and(|body| body["error"]["type"] == "exceed_context_size_error");
+    axum::http::HeaderValue::from(if overflow {
+        (window / 2).max(1)
+    } else {
+        window
+    })
+}
+
+fn with_window(mut response: Response, window: axum::http::HeaderValue) -> Response {
+    response.headers_mut().insert(CONTEXT_WINDOW_HEADER, window);
+    response
 }
 
 /// The model's chat template accepts a system message only first, but the harness
@@ -351,40 +393,6 @@ pub(crate) fn demote_late_system(payload: &mut Value) {
             }
         }
     }
-}
-
-/// A generation that never stops (a model stuck repeating itself, a request with no limit)
-/// holds the only slot while everyone else queues and then fails. Every request gets a ceiling:
-/// the client's own limit when it is lower, otherwise `cap`. Zero turns the ceiling off.
-pub(crate) fn cap_output(payload: &mut Value, default_key: &str, cap: u64) {
-    if cap == 0 {
-        return;
-    }
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    let mut present = false;
-    for key in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
-        if let Some(value) = object.get_mut(key) {
-            present = true;
-            if value.as_u64().is_none_or(|asked| asked > cap) {
-                *value = json!(cap);
-            }
-        }
-    }
-    if !present {
-        object.insert(default_key.to_owned(), json!(cap));
-    }
-}
-
-/// True when the ceiling `cap_output` applied is what limits the request, not a lower limit the
-/// client asked for.
-pub(crate) fn cap_binds(payload: &Value, cap: u64) -> bool {
-    let limits: Vec<u64> = ["max_tokens", "max_completion_tokens", "max_output_tokens"]
-        .iter()
-        .filter_map(|key| payload.get(*key).and_then(Value::as_u64))
-        .collect();
-    cap != 0 && !limits.is_empty() && limits.iter().all(|limit| *limit == cap)
 }
 
 async fn forward(
@@ -428,17 +436,23 @@ async fn forward(
     {
         object.insert("model".to_owned(), json!(state.config.model_id));
     }
+    // llama-server answers an image it cannot read with a 500, which the client retries until the
+    // turn times out. The coded 400 is the rejection the client recovers from: it drops the image and
+    // resends the turn.
+    if !state.vision.load(Ordering::Relaxed)
+        && ["messages", "input"]
+            .iter()
+            .any(|key| payload.get(*key).is_some_and(carries_image))
+    {
+        return image_rejected();
+    }
     demote_late_system(&mut payload);
-    cap_output(
-        &mut payload,
-        if path.ends_with("/responses") {
-            "max_output_tokens"
-        } else {
-            "max_tokens"
-        },
-        state.config.max_output_tokens,
-    );
-    let cap_binds = cap_binds(&payload, state.config.max_output_tokens);
+    if path.ends_with("/chat/completions") {
+        force_named_tool(&mut payload);
+    }
+    if let Some(budgets) = &state.config.reasoning_budgets {
+        budgets.apply(path, &mut payload);
+    }
     let stream = payload
         .get("stream")
         .and_then(|value| value.as_bool())
@@ -501,18 +515,19 @@ async fn forward(
         .to_owned();
     if !status.is_success() {
         let bytes = upstream.bytes().await.unwrap_or_default();
-        return passthrough(status, &content_type, retry_after.as_deref(), bytes);
+        let window = reported_window(state, Some(&bytes));
+        return with_window(
+            passthrough(status, &content_type, retry_after.as_deref(), bytes),
+            window,
+        );
     }
     if stream || content_type.contains("text/event-stream") {
         let stream = upstream.bytes_stream();
-        let body = Body::from_stream(rewrite_stream(
-            stream,
-            permit,
-            state.loops_aborted.clone(),
-            state.reasoning_overruns.clone(),
-            cap_binds,
-        ));
-        return sse_response(status, retry_after.as_deref(), body);
+        let body = Body::from_stream(rewrite_stream(stream, permit, state.loops_aborted.clone()));
+        return with_window(
+            sse_response(status, retry_after.as_deref(), body),
+            reported_window(state, None),
+        );
     }
     let bytes = match upstream.bytes().await {
         Ok(bytes) => bytes,
@@ -521,11 +536,14 @@ async fn forward(
         }
     };
     let rewritten = rewrite_json_bytes(&bytes).unwrap_or_else(|| bytes.to_vec());
-    passthrough(
-        status,
-        "application/json",
-        retry_after.as_deref(),
-        rewritten,
+    with_window(
+        passthrough(
+            status,
+            "application/json",
+            retry_after.as_deref(),
+            rewritten,
+        ),
+        reported_window(state, None),
     )
 }
 
@@ -574,6 +592,74 @@ fn sse_response(status: reqwest::StatusCode, retry_after: Option<&str>, body: Bo
         response.headers_mut().insert(RETRY_AFTER, value);
     }
     response
+}
+
+/// llama-server takes `tool_choice` only as a string and drops the object that names one function,
+/// so the call ran unforced. `required` over the named tool alone is the same constraint.
+fn force_named_tool(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(name) = object
+        .get("tool_choice")
+        .and_then(|choice| choice.pointer("/function/name"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let Some(Value::Array(tools)) = object.get_mut("tools") else {
+        return;
+    };
+    let named =
+        |tool: &Value| tool.pointer("/function/name").and_then(Value::as_str) == Some(&name);
+    if !tools.iter().any(named) {
+        return;
+    }
+    tools.retain(named);
+    object.insert("tool_choice".to_owned(), json!("required"));
+}
+
+/// Image content in any of the three request shapes: chat `image_url`, responses `input_image`,
+/// messages `image`, including images nested in tool results. Tool schemas are never scanned.
+fn carries_image(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("image_url" | "input_image" | "image")
+            ) || map.values().any(carries_image)
+        }
+        Value::Array(items) => items.iter().any(carries_image),
+        _ => false,
+    }
+}
+
+fn image_rejected() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        axum::Json(json!({"error": {
+            "message": "the served model does not accept image input",
+            "type": "invalid_request_error",
+            "code": "invalid_image",
+        }})),
+    )
+        .into_response()
+}
+
+/// A body that fails to arrive is almost always a client that hung up mid-upload: the harness cancels its
+/// side calls when a session ends. That is answered with 499 (client closed request), as nginx logs it, so
+/// it never reads as a request the server refused. Other rejections, such as an oversized body, stand.
+fn received(body: Result<Bytes, BytesRejection>) -> Result<Bytes, Response> {
+    match body {
+        Ok(body) => Ok(body),
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::UnknownBodyError(_))) => {
+            Err(StatusCode::from_u16(499)
+                .expect("invariant: 499 is a valid status code")
+                .into_response())
+        }
+        Err(rejection) => Err(rejection.into_response()),
+    }
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {
@@ -637,8 +723,6 @@ fn rewrite_stream(
     incoming: impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
     permit: OwnedSemaphorePermit,
     loops_aborted: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    reasoning_overruns: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    cap_binds: bool,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send {
     futures_util::stream::unfold(
         StreamState {
@@ -646,8 +730,6 @@ fn rewrite_stream(
             fixer: SseFix::default(),
             guard: LoopGuard::default(),
             loops_aborted,
-            reasoning_overruns,
-            cap_binds,
             finished: false,
             _permit: permit,
         },
@@ -666,20 +748,6 @@ fn rewrite_stream(
                             tracing::warn!("model output is repeating itself; stream cut");
                             return Some((
                                 Err(std::io::Error::other("generation was repeating itself")),
-                                state,
-                            ));
-                        }
-                        if state.cap_binds && state.guard.overran() {
-                            // The ceiling cut a generation that never left its reasoning. The
-                            // harness does not retry a length finish but does retry a broken
-                            // stream, and a fresh sample usually answers.
-                            state.finished = true;
-                            state.reasoning_overruns.fetch_add(1, Ordering::Relaxed);
-                            tracing::warn!(
-                                "generation spent its whole output ceiling reasoning; stream cut"
-                            );
-                            return Some((
-                                Err(std::io::Error::other("generation never left its reasoning")),
                                 state,
                             ));
                         }
@@ -712,8 +780,6 @@ struct StreamState {
     fixer: SseFix,
     guard: LoopGuard,
     loops_aborted: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    reasoning_overruns: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    cap_binds: bool,
     finished: bool,
     _permit: OwnedSemaphorePermit,
 }
@@ -726,10 +792,6 @@ struct LoopGuard {
     lines: Vec<u8>,
     text: Vec<u8>,
     unchecked: usize,
-    /// An answer or a tool call has started.
-    answered: bool,
-    /// The upstream finished because it ran out of tokens.
-    length: bool,
 }
 
 impl LoopGuard {
@@ -740,56 +802,11 @@ impl LoopGuard {
     /// Fewer than this share of the sampled pieces being distinct counts as a loop.
     const DISTINCT_BELOW: f64 = 0.10;
 
-    /// True when the generation ended at the token limit having produced reasoning only.
-    fn overran(&self) -> bool {
-        self.length && !self.answered
-    }
-
-    /// Record whether a line carries an answer or tool call, or a finish at the token limit,
-    /// in any of the three protocols.
-    fn note(&mut self, line: &[u8]) {
-        let Some(data) = trim_ascii_end(line).strip_prefix(b"data:") else {
-            return;
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(trim_ascii_start(data)) else {
-            return;
-        };
-        let text = |pointer: &str| {
-            value
-                .pointer(pointer)
-                .and_then(Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty())
-        };
-        let has = |pointer: &str| value.pointer(pointer).is_some_and(|found| !found.is_null());
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-        if text("/choices/0/delta/content")
-            || has("/choices/0/delta/tool_calls")
-            || text("/delta/text")
-            || has("/delta/partial_json")
-            || value.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use")
-            || (kind.ends_with("output_text.delta") && text("/delta"))
-            || kind == "response.function_call_arguments.delta"
-            || value.pointer("/item/type").and_then(Value::as_str) == Some("function_call")
-        {
-            self.answered = true;
-        }
-        if value
-            .pointer("/choices/0/finish_reason")
-            .and_then(Value::as_str)
-            == Some("length")
-            || value.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("max_tokens")
-            || kind == "response.incomplete"
-        {
-            self.length = true;
-        }
-    }
-
     /// Feed raw SSE bytes; true when the model is looping.
     fn feed(&mut self, bytes: &[u8]) -> bool {
         self.lines.extend_from_slice(bytes);
         while let Some(pos) = self.lines.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = self.lines.drain(..=pos).collect();
-            self.note(&line);
             if let Some(delta) = visible_delta(&line) {
                 self.text.extend_from_slice(delta.as_bytes());
                 self.unchecked += delta.len();
@@ -1152,86 +1169,6 @@ mod tests {
                 "tool arguments are not watched"
             );
         }
-    }
-
-    #[test]
-    fn only_a_reasoning_only_generation_cut_at_the_limit_counts_as_an_overrun() {
-        let finish = |reason: &str| {
-            format!(
-                "data: {}\n\n",
-                json!({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]})
-            )
-            .into_bytes()
-        };
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("reasoning_content", "hmm, let me think. "));
-        guard.feed(&chat_line("content", "\n\n"));
-        assert!(!guard.overran(), "no finish yet");
-        guard.feed(&finish("length"));
-        assert!(guard.overran());
-
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("reasoning_content", "hmm"));
-        guard.feed(&finish("stop"));
-        assert!(!guard.overran(), "a normal stop is not an overrun");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(&chat_line("content", "Here is the file."));
-        guard.feed(&finish("length"));
-        assert!(!guard.overran(), "an answer was started");
-
-        let mut guard = LoopGuard::default();
-        let call =
-            json!({"choices": [{"delta": {"tool_calls": [{"function": {"arguments": "{"}}]}}]});
-        guard.feed(format!("data: {call}\n\n").as_bytes());
-        guard.feed(&finish("length"));
-        assert!(!guard.overran(), "a tool call was started");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(
-            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hm\"}}\n\n",
-        );
-        guard.feed(
-            b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
-        );
-        assert!(guard.overran(), "messages protocol");
-
-        let mut guard = LoopGuard::default();
-        guard.feed(b"data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"hm\"}\n\n");
-        guard.feed(b"data: {\"type\":\"response.incomplete\"}\n\n");
-        assert!(guard.overran(), "responses protocol");
-    }
-
-    #[test]
-    fn the_ceiling_binds_only_when_the_client_asked_for_no_less() {
-        assert!(cap_binds(&json!({"max_tokens": 100}), 100));
-        assert!(!cap_binds(&json!({"max_tokens": 77}), 100));
-        assert!(!cap_binds(
-            &json!({"max_tokens": 100, "max_completion_tokens": 7}),
-            100
-        ));
-        assert!(
-            !cap_binds(&json!({"messages": []}), 100),
-            "no limit applied"
-        );
-        assert!(!cap_binds(&json!({"max_tokens": 100}), 0), "ceiling off");
-    }
-
-    #[test]
-    fn every_request_gets_an_output_ceiling() {
-        let mut open = json!({"messages": []});
-        cap_output(&mut open, "max_tokens", 100);
-        assert_eq!(open["max_tokens"], 100);
-        let mut high = json!({"max_tokens": 5000, "max_completion_tokens": 7});
-        cap_output(&mut high, "max_tokens", 100);
-        assert_eq!(high["max_tokens"], 100);
-        assert_eq!(high["max_completion_tokens"], 7);
-        let mut responses = json!({"input": []});
-        cap_output(&mut responses, "max_output_tokens", 100);
-        assert_eq!(responses["max_output_tokens"], 100);
-        let mut off = json!({});
-        cap_output(&mut off, "max_tokens", 0);
-        assert!(off.get("max_tokens").is_none());
     }
 
     #[test]
