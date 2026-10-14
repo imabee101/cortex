@@ -498,6 +498,9 @@ async fn phase2_contract_matches_proxy_types() {
         models["data"][0]["supports_backend_search"], false,
         "no search token, no advertised search"
     );
+    assert_eq!(models["data"][0]["supports_reasoning_effort"], true);
+    assert_eq!(models["data"][0]["reasoning_efforts"][3]["value"], "medium");
+    assert_eq!(models["data"][0]["reasoning_efforts"][3]["default"], true);
 
     let bundle = session
         .http

@@ -148,16 +148,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|spec| cortex_api::ReasoningBudgets::parse(&spec, &args.reasoning_default))
         .transpose()
         .map_err(|err| anyhow::anyhow!(err))?;
-    if config.api_backend == "messages"
-        && config
-            .reasoning_budgets
-            .as_ref()
-            .is_some_and(cortex_api::ReasoningBudgets::rejected_on_messages)
-    {
-        return Err(anyhow::anyhow!(
-            "reasoning level `minimal` cannot be set on the messages backend: the harness never sends it"
-        ));
-    }
+    config.reasoning_default = args.reasoning_default;
     config.props_wait_tries = 90;
     let drain = std::time::Duration::from_secs(config.drain_secs);
     let running = cortex_api::serve(config).await?;

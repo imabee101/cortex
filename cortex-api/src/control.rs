@@ -161,20 +161,20 @@ pub async fn models(State(state): State<AppState>, AuthUser(_user): AuthUser) ->
 }
 
 pub fn model_list(state: &AppState) -> serde_json::Value {
-    let mut model = json!({
+    let model = json!({
         "id": state.config.model_id,
         "model": state.config.model_id,
         "name": state.config.model_id,
         "context_window": crate::inference::context_window(state),
         "api_backend": state.config.api_backend,
-        "supports_backend_search": crate::search::configured(state),
+        "supports_backend_search": crate::search::configured(state)
+            && state.config.api_backend == "responses",
+        "supports_reasoning_effort": true,
+        "reasoning_efforts": crate::reasoning::effort_menu(
+            &state.config.api_backend,
+            &state.config.reasoning_default,
+        ),
     });
-    if let Some(budgets) = &state.config.reasoning_budgets {
-        let menu = budgets.menu_for(&state.config.api_backend);
-        if menu.as_array().is_some_and(|items| !items.is_empty()) {
-            model["reasoning_efforts"] = menu;
-        }
-    }
     json!({ "data": [model] })
 }
 

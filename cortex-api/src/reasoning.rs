@@ -5,9 +5,128 @@
 
 use serde_json::{Value, json};
 
-/// Levels the harness can send, as its menu spells them. `none` is not a level here: it turns
-/// thinking off, which llama-server already does on its own.
-const LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+/// Levels the harness can send. `none` is one of them. llama-server turns thinking off when that
+/// string arrives, so the translator removes it after applying a budget.
+const LEVELS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Menu the model entry returns on every backend. Messages omits `none` and `minimal` because the
+/// harness does not send those strings on that route.
+pub fn effort_menu(api_backend: &str, default: &str) -> Value {
+    let messages = api_backend == "messages";
+    let visible: Vec<&str> = LEVELS
+        .into_iter()
+        .filter(|level| !(messages && (*level == "none" || *level == "minimal")))
+        .collect();
+    let default = if visible.contains(&default) {
+        default
+    } else {
+        "medium"
+    };
+    Value::Array(
+        visible
+            .into_iter()
+            .map(|level| json!({"value": level, "default": level == default}))
+            .collect(),
+    )
+}
+
+/// Applies a configured budget. `none` is removed so llama-server does not disable thinking.
+/// A level with no budget is removed rather than forwarded.
+pub fn translate(path: &str, payload: &mut Value, budgets: Option<&ReasoningBudgets>) {
+    if let Some(budgets) = budgets {
+        budgets.apply(path, payload);
+    }
+    remove_none(path, payload);
+    remove_unbudgeted(path, payload);
+}
+
+fn budget_applied(path: &str, object: &serde_json::Map<String, Value>) -> bool {
+    if path.ends_with("/messages") {
+        object
+            .get("thinking")
+            .and_then(|thinking| thinking.get("budget_tokens"))
+            .is_some()
+    } else {
+        object.contains_key("reasoning_budget_tokens")
+    }
+}
+
+fn remove_unbudgeted(path: &str, payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if budget_applied(path, object) {
+        return;
+    }
+    if path.ends_with("/messages") {
+        if let Some(config) = object
+            .get_mut("output_config")
+            .and_then(Value::as_object_mut)
+        {
+            config.remove("effort");
+        }
+        return;
+    }
+    if path.ends_with("/responses") {
+        if let Some(reasoning) = object.get_mut("reasoning").and_then(Value::as_object_mut) {
+            reasoning.remove("effort");
+        }
+        if object
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .is_some_and(|reasoning| reasoning.is_empty())
+        {
+            object.remove("reasoning");
+        }
+        return;
+    }
+    object.remove("reasoning_effort");
+}
+
+fn remove_none(path: &str, payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if path.ends_with("/messages") {
+        let disable = object
+            .get("output_config")
+            .and_then(|config| config.get("effort"))
+            .and_then(Value::as_str)
+            == Some("none");
+        if disable
+            && let Some(config) = object
+                .get_mut("output_config")
+                .and_then(Value::as_object_mut)
+        {
+            config.remove("effort");
+        }
+        return;
+    }
+    if path.ends_with("/responses") {
+        let disable = object
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str)
+            == Some("none");
+        if !disable {
+            return;
+        }
+        if let Some(reasoning) = object.get_mut("reasoning").and_then(Value::as_object_mut) {
+            reasoning.remove("effort");
+        }
+        if object
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .is_some_and(|reasoning| reasoning.is_empty())
+        {
+            object.remove("reasoning");
+        }
+        return;
+    }
+    if object.get("reasoning_effort").and_then(Value::as_str) == Some("none") {
+        object.remove("reasoning_effort");
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReasoningBudgets {
@@ -153,7 +272,6 @@ mod tests {
             ("medium", "medium"),
             ("medium=0", "medium"),
             ("medium=lots", "medium"),
-            ("none=100", "none"),
             ("huge=100", "huge"),
             ("low=1,low=2", "low"),
             ("low=2048", "medium"),
@@ -244,12 +362,48 @@ mod tests {
     }
 
     #[test]
-    fn an_unconfigured_level_passes_through() {
-        for level in ["none", "xhigh"] {
-            let mut payload = json!({"reasoning_effort": level, "messages": []});
-            let before = payload.clone();
-            budgets().apply("/v1/chat/completions", &mut payload);
-            assert_eq!(payload, before, "{level}");
-        }
+    fn an_unconfigured_level_is_not_forwarded() {
+        let mut payload = json!({"reasoning_effort": "xhigh", "messages": []});
+        translate("/v1/chat/completions", &mut payload, Some(&budgets()));
+        assert_eq!(payload, json!({"messages": []}));
+    }
+
+    #[test]
+    fn none_is_a_budget_and_translate_removes_the_string() {
+        let budgets = ReasoningBudgets::parse("none=2048,medium=8192", "medium").expect("parse");
+        let mut payload = json!({"reasoning_effort": "none", "messages": []});
+        translate("/v1/chat/completions", &mut payload, Some(&budgets));
+        assert_eq!(payload["reasoning_budget_tokens"], 2048);
+        assert!(payload.get("reasoning_effort").is_none());
+
+        let mut bare = json!({"reasoning_effort": "none", "messages": []});
+        translate("/v1/chat/completions", &mut bare, None);
+        assert_eq!(bare, json!({"messages": []}));
+    }
+
+    #[test]
+    fn effort_menu_lists_every_level_and_messages_omits_the_two_it_cannot_send() {
+        let chat = effort_menu("chat_completions", "medium");
+        let chat = chat.as_array().expect("menu");
+        assert_eq!(chat.len(), 7);
+        assert_eq!(chat[3], json!({"value": "medium", "default": true}));
+        let messages = effort_menu("messages", "none");
+        let values: Vec<&str> = messages
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["value"].as_str().unwrap())
+            .collect();
+        assert!(!values.contains(&"none"));
+        assert!(!values.contains(&"minimal"));
+        assert_eq!(messages[0]["value"], "low");
+        assert_eq!(messages[0]["default"], false);
+        assert!(
+            messages
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["default"] == true)
+        );
     }
 }

@@ -4,6 +4,8 @@ Fork of the upstream harness. cortex-api is our server and implements what the h
 
 llama.cpp, cortex-api, and the harness have to agree. The API bends to the harness and translates between them. No shims, bolt-ons, or hardcoding. A request we cannot serve, or have no infrastructure for, is rejected by the API. Do not edit the harness to hide that.
 
+In production, a setting the client expects from the API is implemented on the API in the form the client already accepts. Translate it for llama.cpp when the server needs a different form. Leave the harness unchanged. Do not hardcode that setting or stand in a manual setup step for it. Reasoning levels and search are examples, not the whole list: the same rule applies to every other setting the client reads from the API.
+
 Edit the harness only to rebrand it or point it at us. Any other harness change needs a direct yes, discussed first. A nearby sentence is not a yes. It also needs evidence the original authors would have made that change to fit a 9B model as a first-class citizen. Suggest it only as a last resort.
 
 Make the trio stable, then take a baseline, then improve the 9B frontier experience by optimizing prompts. Do not ship an unreliable change, or one whose complexity can break the trio.
